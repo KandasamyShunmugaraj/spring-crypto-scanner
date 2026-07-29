@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- ── Project identity ─────────────────────────────────────────────── -->
+    <groupId>com.thesis</groupId>
+    <artifactId>spring-crypto-scanner</artifactId>
+    <version>2.0.0</version>
+    <packaging>jar</packaging>
+    <name>SpringCryptoScanner</name>
+    <description>
+        Spring Security-aware cryptographic asset discovery tool.
+        Extends CBOMkit (IBM / Linux Foundation PQCA) to cover
+        the Spring Security framework layer gaps.
+        Produces CycloneDX 1.6 compliant CBOM JSON output.
+        M.Tech Thesis — Kandasamy S | IIT Jodhpur
+    </description>
+
+    <!-- ── Spring Boot parent ────────────────────────────────────────────── -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.5</version>
+        <relativePath/>
+    </parent>
+
+    <!-- ── Java version ──────────────────────────────────────────────────── -->
+    <properties>
+        <java.version>17</java.version>
+        <javaparser.version>3.26.4</javaparser.version>
+    </properties>
+
+    <!-- ── Dependencies ──────────────────────────────────────────────────── -->
+    <dependencies>
+
+        <!-- Spring Boot Web — serves the web UI on port 8082 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Spring Security — permits /api/scan without login -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!-- JavaParser — parses Java source files into AST
+             This is the core library that makes the scanner work.
+             cu.findAll(MethodCallExpr.class) etc. all come from here. -->
+        <dependency>
+            <groupId>com.github.javaparser</groupId>
+            <artifactId>javaparser-symbol-solver-core</artifactId>
+            <version>${javaparser.version}</version>
+        </dependency>
+
+        <!-- Spring Boot Test — for unit tests -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <!-- ── Build ─────────────────────────────────────────────────────────── -->
+    <build>
+        <plugins>
+
+            <!-- Spring Boot Maven Plugin — mvn spring-boot:run -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+
+            <!-- Exec Maven Plugin — run scanner from command line
+                 Usage: mvn exec:java -Dexec.args="/path/to/project" -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.0</version>
+                <configuration>
+                    <mainClass>com.thesis.cryptoscanner.SpringCryptoScanner</mainClass>
+                </configuration>
+            </plugin>
+
+        </plugins>
+    </build>
+
+</project>

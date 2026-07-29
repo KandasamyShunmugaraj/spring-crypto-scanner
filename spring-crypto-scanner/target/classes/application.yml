@@ -1,0 +1,6 @@
+spring:
+  application:
+    name: spring-crypto-scanner
+
+server:
+  port: 8082

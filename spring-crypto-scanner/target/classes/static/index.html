@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpringCryptoScanner — IIT Jodhpur</title>
+    <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #0D1B4B; color: #fff; min-height: 100vh; }
+
+    .header { background: #1E2761; padding: 20px 32px;
+              border-bottom: 2px solid #E8B84B; }
+    .header h1 { font-size: 22px; color: #E8B84B; }
+    .header p  { font-size: 13px; color: #CADCFC; margin-top: 4px; }
+    .header small { color: #6B7A99; font-size: 11px; }
+
+    /* Tabs */
+    .tabs { display: flex; gap: 0; background: #1E2761;
+            border-bottom: 1px solid #2d3f8a; padding: 0 32px; }
+    .tab { padding: 12px 22px; font-size: 13px; cursor: pointer;
+           color: #6B7A99; border-bottom: 3px solid transparent;
+           transition: all .15s; user-select: none; }
+    .tab:hover { color: #CADCFC; }
+    .tab.active { color: #E8B84B; border-bottom-color: #E8B84B; font-weight: 600; }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .main { padding: 24px 32px; max-width: 1400px; margin: 0 auto; }
+
+    /* Scan box */
+    .scan-box { background: #1E2761; border-radius: 10px;
+                padding: 20px 24px; margin-bottom: 24px; }
+    .scan-box h2 { font-size: 14px; color: #CADCFC; margin-bottom: 12px; }
+    .scan-row { display: flex; gap: 12px; align-items: center; }
+    .scan-row input { flex: 1; padding: 10px 14px; border-radius: 6px;
+                      border: 1px solid #2d3f8a; background: #0D1B4B;
+                      color: #fff; font-size: 13px; }
+    .scan-row input::placeholder { color: #6B7A99; }
+    .scan-row button.scan-btn { padding: 10px 24px; background: #E8B84B;
+                       color: #0D1B4B; border: none; border-radius: 6px;
+                       font-weight: 600; font-size: 13px; cursor: pointer; }
+    .scan-row button.scan-btn:hover { background: #f0c45e; }
+    .scan-row button.scan-btn:disabled { background: #6B7A99; cursor: not-allowed; }
+    .quick-btn { padding: 4px 10px; background: #0D1B4B; color: #CADCFC;
+                 border: 1px solid #2d3f8a; border-radius: 4px;
+                 font-size: 11px; cursor: pointer; }
+    .quick-btn:hover { border-color: #E8B84B; color: #E8B84B; }
+    .spinner { display: none; color: #E8B84B; font-size: 13px; margin-left: 12px; }
+
+    /* Stats */
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr);
+                  gap: 12px; margin-bottom: 24px; }
+    .stat-card { background: #1E2761; border-radius: 8px; padding: 16px;
+                 text-align: center; border: 1px solid #2d3f8a; }
+    .stat-num  { font-size: 32px; font-weight: 700; }
+    .stat-label { font-size: 11px; color: #6B7A99; margin-top: 4px; }
+
+    /* Panels */
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .panel { background: #1E2761; border-radius: 10px; padding: 20px; }
+    .panel h3 { font-size: 12px; color: #CADCFC; margin-bottom: 14px;
+                font-weight: 600; letter-spacing: .04em;
+                text-transform: uppercase; }
+
+    /* Findings */
+    .finding { background: #0D1B4B; border-radius: 6px; padding: 10px 12px;
+               margin-bottom: 8px; border-left: 3px solid #6B7A99; }
+    .finding.CRITICAL { border-left-color: #E05C5C; }
+    .finding.HIGH     { border-left-color: #F39C12; }
+    .finding.MEDIUM   { border-left-color: #28A0A0; }
+    .finding.INFO     { border-left-color: #6B7A99; }
+    .f-rule   { font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+    .f-detail { font-size: 11px; color: #CADCFC; line-height: 1.5; }
+    .f-meta   { font-size: 10px; color: #6B7A99; margin-top: 4px; }
+
+    /* Badges */
+    .badge { display: inline-block; padding: 1px 6px; border-radius: 3px;
+             font-size: 10px; font-weight: 600; margin-right: 4px; }
+    .badge-red   { background: rgba(224,92,92,.2); color: #E05C5C; }
+    .badge-amber { background: rgba(243,156,18,.2); color: #F39C12; }
+    .badge-teal  { background: rgba(40,160,160,.2); color: #28A0A0; }
+    .badge-blue  { background: rgba(202,220,252,.15); color: #CADCFC; }
+    .badge-miss  { background: rgba(224,92,92,.15); color: #E05C5C; }
+    .badge-found { background: rgba(40,160,160,.15); color: #28A0A0; }
+    .badge-green { background: rgba(46,204,113,.15); color: #2ECC71; }
+
+    /* Layer bars */
+    .layer-bar { margin-bottom: 10px; }
+    .layer-label { display: flex; justify-content: space-between;
+                   font-size: 11px; color: #CADCFC; margin-bottom: 4px; }
+    .bar-bg   { background: #0D1B4B; border-radius: 4px; height: 10px; }
+    .bar-fill { height: 10px; border-radius: 4px; transition: width .4s; }
+
+    /* CBOM */
+    .cbom-box { background: #0D1B4B; border-radius: 6px; padding: 12px;
+                font-family: 'Courier New', monospace; font-size: 11px;
+                color: #CADCFC; max-height: 320px; overflow-y: auto;
+                white-space: pre; line-height: 1.6; margin-top: 8px; }
+    .copy-btn { float: right; padding: 4px 10px; background: #E8B84B;
+                color: #0D1B4B; border: none; border-radius: 4px;
+                font-size: 10px; font-weight: 600; cursor: pointer; }
+
+    /* CBOMkit compare box (scanner tab) */
+    .cbomkit-compare { background: #0a1530; border-radius: 8px; padding: 16px;
+                       margin-bottom: 16px; border: 1px solid #2d3f8a; }
+    .cbomkit-compare h4 { font-size: 12px; color: #E8B84B; margin-bottom: 10px; }
+    .compare-row { display: flex; gap: 12px; align-items: center; margin-bottom: 6px; }
+    .compare-tool { font-size: 11px; color: #6B7A99; width: 160px; flex-shrink: 0; }
+    .compare-num  { font-size: 20px; font-weight: 700; width: 40px; flex-shrink: 0; }
+    .compare-bar  { flex: 1; background: #1E2761; border-radius: 3px; height: 8px; }
+    .compare-fill { height: 8px; border-radius: 3px; }
+
+    /* ── COMPARISON TAB STYLES ──────────────────────────────────────────── */
+    .cmp-hero { display: grid; grid-template-columns: 1fr 1fr;
+                gap: 16px; margin-bottom: 24px; }
+    .cmp-tool-card { border-radius: 10px; padding: 24px;
+                     text-align: center; border: 2px solid; }
+    .cmp-tool-card.cbomkit  { background: rgba(40,160,160,.08);
+                               border-color: #28A0A0; }
+    .cmp-tool-card.scanner  { background: rgba(224,92,92,.08);
+                               border-color: #E05C5C; }
+    .cmp-tool-name { font-size: 13px; font-weight: 600;
+                     margin-bottom: 8px; color: #CADCFC; }
+    .cmp-tool-num  { font-size: 64px; font-weight: 700; line-height: 1; }
+    .cmp-tool-sub  { font-size: 12px; color: #6B7A99; margin-top: 6px; }
+    .cmp-tool-card.cbomkit .cmp-tool-num { color: #28A0A0; }
+    .cmp-tool-card.scanner  .cmp-tool-num { color: #E05C5C; }
+
+    .cmp-summary { background: #1E2761; border-radius: 10px;
+                   padding: 16px 20px; margin-bottom: 24px;
+                   border: 1px solid #E8B84B; }
+    .cmp-summary p { font-size: 12px; color: #CADCFC; line-height: 1.7; }
+    .cmp-summary strong { color: #E8B84B; }
+
+    /* Comparison table */
+    .cmp-table-wrap { overflow-x: auto; margin-bottom: 24px; }
+    table.cmp { width: 100%; border-collapse: collapse;
+                font-size: 12px; }
+    table.cmp th { background: #1E2761; padding: 10px 12px;
+                   text-align: left; color: #CADCFC; font-weight: 600;
+                   font-size: 11px; letter-spacing: .04em;
+                   text-transform: uppercase; border-bottom: 2px solid #2d3f8a; }
+    table.cmp td { padding: 10px 12px; border-bottom: 1px solid #1a2660;
+                   vertical-align: top; line-height: 1.5; }
+    table.cmp tr:nth-child(even) td { background: rgba(255,255,255,.02); }
+    table.cmp tr:hover td { background: rgba(232,184,75,.04); }
+    .td-miss  { color: #E05C5C; font-weight: 600; }
+    .td-found { color: #28A0A0; font-weight: 600; }
+    .td-layer { font-family: 'Courier New', monospace; font-size: 10px;
+                padding: 2px 6px; border-radius: 3px;
+                background: rgba(202,220,252,.1); color: #CADCFC; }
+    .td-sev-CRITICAL { color: #E05C5C; font-weight: 700; }
+    .td-sev-HIGH     { color: #F39C12; font-weight: 600; }
+    .td-sev-MEDIUM   { color: #28A0A0; }
+    .td-sev-INFO     { color: #6B7A99; }
+    .td-qs-notQuantumSafe    { color: #E05C5C; }
+    .td-qs-classicallyBroken { color: #F39C12; }
+    .td-qs-quantumSafe       { color: #2ECC71; }
+    .td-qs-unknown           { color: #6B7A99; }
+
+    /* Section headings inside comparison tab */
+    .cmp-section { font-size: 13px; font-weight: 600; color: #E8B84B;
+                   margin: 24px 0 12px; padding-bottom: 6px;
+                   border-bottom: 1px solid #2d3f8a; }
+
+    /* Layer breakdown table */
+    .layer-table { width: 100%; border-collapse: collapse;
+                   font-size: 12px; margin-bottom: 24px; }
+    .layer-table th { background: #1E2761; padding: 8px 12px;
+                      color: #CADCFC; font-size: 11px; font-weight: 600;
+                      text-align: left; border-bottom: 2px solid #2d3f8a; }
+    .layer-table td { padding: 10px 12px;
+                      border-bottom: 1px solid #1a2660; }
+    .layer-table tr:nth-child(even) td { background: rgba(255,255,255,.02); }
+    .l-name  { font-family: 'Courier New', monospace; font-size: 11px;
+               color: #CADCFC; }
+    .l-zero  { color: #6B7A99; }
+    .l-num   { font-weight: 700; }
+
+    .empty { text-align: center; color: #6B7A99;
+             padding: 32px; font-size: 13px; }
+
+    .info-banner { background: rgba(232,184,75,.08);
+                   border: 1px solid rgba(232,184,75,.3);
+                   border-radius: 8px; padding: 14px 18px;
+                   font-size: 12px; color: #CADCFC;
+                   margin-bottom: 20px; line-height: 1.7; }
+    .info-banner strong { color: #E8B84B; }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+    <h1>🔍 SpringCryptoScanner — Thesis Tool v2.0</h1>
+    <p>Spring Security-aware Cryptographic Asset Discovery | CycloneDX 1.6 CBOM Output</p>
+    <small>M.Tech Thesis — Kandasamy S | IIT Jodhpur | Supervisor: Dr. Bimal Mandal</small>
+</div>
+
+<!-- Tab bar -->
+<div class="tabs">
+    <div class="tab active" onclick="switchTab('scanner')">🔍 Scanner</div>
+    <div class="tab" onclick="switchTab('comparison')">⚖️ CBOMkit vs SpringCryptoScanner</div>
+    <div class="tab" onclick="switchTab('cbom')">📄 CBOM JSON</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<!-- TAB 1: SCANNER -->
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<div id="tab-scanner" class="tab-content active">
+    <div class="main">
+
+        <div class="scan-box">
+            <h2>📁 SCAN A SPRING BOOT PROJECT</h2>
+            <div class="scan-row">
+                <input id="pathInput" type="text"
+                       placeholder="Enter absolute path — e.g. /Users/apple/thesis/crypto-gap-test"
+                       value="/Users/apple/thesis/crypto-gap-test"/>
+                <button class="scan-btn" id="scanBtn" onclick="runScan()">▶ Scan</button>
+                <span class="spinner" id="spinner">⏳ Scanning...</span>
+            </div>
+            <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                <small style="color:#6B7A99">Quick select:</small>
+                <button class="quick-btn"
+                        onclick="setPath('/Users/apple/thesis/crypto-gap-test')">
+                    crypto-gap-test (test project)</button>
+                <button class="quick-btn"
+                        onclick="setPath('/Users/apple/thesis/dataset/projects/spring-security-samples')">
+                    spring-security-samples ★</button>
+                <button class="quick-btn"
+                        onclick="setPath('/Users/apple/thesis/dataset/projects/tutorials')">
+                    tutorials (Baeldung) ●</button>
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="stats-grid" id="statsGrid" style="display:none">
+            <div class="stat-card">
+                <div class="stat-num" style="color:#fff" id="statTotal">0</div>
+                <div class="stat-label">Total Findings</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-num" style="color:#E05C5C" id="statCritical">0</div>
+                <div class="stat-label">CRITICAL</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-num" style="color:#E05C5C" id="statQVuln">0</div>
+                <div class="stat-label">Quantum-Vulnerable (Shor's)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-num" style="color:#F39C12" id="statCBOMkitMiss">0</div>
+                <div class="stat-label">CBOMkit Would Miss</div>
+            </div>
+        </div>
+
+        <!-- Main panels -->
+        <div class="row2" id="mainPanels" style="display:none">
+            <div class="panel">
+                <h3>Findings</h3>
+                <div class="cbomkit-compare">
+                    <h4>⚖️ CBOMkit vs SpringCryptoScanner</h4>
+                    <div class="compare-row">
+                        <div class="compare-tool">CBOMkit 2.2.0</div>
+                        <div class="compare-num" style="color:#E05C5C" id="cbomkitNum">0</div>
+                        <div class="compare-bar">
+                            <div class="compare-fill" id="cbomkitBar"
+                                 style="width:0%;background:#E05C5C"></div>
+                        </div>
+                    </div>
+                    <div class="compare-row">
+                        <div class="compare-tool">SpringCryptoScanner</div>
+                        <div class="compare-num" style="color:#2ECC71" id="scannerNum">0</div>
+                        <div class="compare-bar">
+                            <div class="compare-fill" id="scannerBar"
+                                 style="width:100%;background:#2ECC71"></div>
+                        </div>
+                    </div>
+                </div>
+                <div id="findingsList">
+                    <div class="empty">Run a scan to see findings</div>
+                </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:16px">
+                <div class="panel">
+                    <h3>Layer Coverage</h3>
+                    <div id="layerBars">
+                        <div class="empty">Run a scan to see layer breakdown</div>
+                    </div>
+                </div>
+                <div class="panel">
+                    <h3>CycloneDX 1.6 CBOM (preview)
+                        <button class="copy-btn" onclick="copyCBOM()">Copy JSON</button>
+                    </h3>
+                    <div class="cbom-box" id="cbomBoxScanner">
+                        Run a scan to generate CBOM JSON
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="empty" id="emptyState">
+            Enter a Spring Boot project path above and click Scan
+        </div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<!-- TAB 2: COMPARISON -->
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<div id="tab-comparison" class="tab-content">
+    <div class="main">
+
+        <div class="info-banner" id="cmpBanner">
+            <strong>How to use:</strong> Run a scan on the Scanner tab first,
+            then return here to see the full comparison.
+            The <strong>spring-security-samples ★</strong> project gives the most
+            compelling result — CBOMkit reports 0, SpringCryptoScanner finds 2 CRITICAL.
+        </div>
+
+        <!-- Hero numbers -->
+        <div class="cmp-hero">
+            <div class="cmp-tool-card cbomkit">
+                <div class="cmp-tool-name">CBOMkit 2.2.0 (IBM / Linux Foundation PQCA)</div>
+                <div class="cmp-tool-num" id="cmpCBOMkitNum">—</div>
+                <div class="cmp-tool-sub">cryptographic assets found</div>
+                <div style="margin-top:12px;font-size:11px;color:#6B7A99">
+                    Detects: Layer 4 (raw JCA calls) only<br>
+                    Misses: Spring Security beans, @Convert, YAML config
+                </div>
+            </div>
+            <div class="cmp-tool-card scanner">
+                <div class="cmp-tool-name">SpringCryptoScanner v2.0 (This Thesis)</div>
+                <div class="cmp-tool-num" id="cmpScannerNum">—</div>
+                <div class="cmp-tool-sub">cryptographic findings detected</div>
+                <div style="margin-top:12px;font-size:11px;color:#6B7A99">
+                    Detects: All 4 layers — JCA + Spring Security + @Convert + YAML<br>
+                    Output: CycloneDX 1.6 CBOM JSON
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary box -->
+        <div class="cmp-summary" id="cmpSummary">
+            <p>
+                Run a scan on the Scanner tab to populate this comparison.
+                The table below will show every finding, which tool detected it,
+                and the quantum safety classification.
+            </p>
+        </div>
+
+        <!-- Layer breakdown table -->
+        <div class="cmp-section">📊 Layer-by-Layer Coverage</div>
+        <table class="layer-table" id="layerTable">
+            <thead>
+            <tr>
+                <th>Layer</th>
+                <th>Description</th>
+                <th>Example</th>
+                <th style="text-align:center">CBOMkit</th>
+                <th style="text-align:center">SpringCryptoScanner</th>
+                <th>Coverage Gap</th>
+            </tr>
+            </thead>
+            <tbody id="layerTableBody">
+            <tr>
+                <td colspan="6" class="empty">Run a scan to populate</td>
+            </tr>
+            </tbody>
+        </table>
+
+        <!-- Detailed findings comparison table -->
+        <div class="cmp-section">🔍 Finding-by-Finding Comparison</div>
+        <div class="cmp-table-wrap">
+            <table class="cmp" id="cmpTable">
+                <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Detection Rule</th>
+                    <th>Layer</th>
+                    <th>File : Line</th>
+                    <th>Algorithm</th>
+                    <th>Severity</th>
+                    <th>Quantum Status</th>
+                    <th style="text-align:center">CBOMkit Detects?</th>
+                    <th>PQ Replacement</th>
+                </tr>
+                </thead>
+                <tbody id="cmpTableBody">
+                <tr><td colspan="9" class="empty">Run a scan to populate</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- What CBOMkit misses — static explanation -->
+        <div class="cmp-section">❌ Why CBOMkit Misses Layers 1–3</div>
+        <table class="cmp">
+            <thead>
+            <tr>
+                <th>Layer</th>
+                <th>Spring Boot Pattern</th>
+                <th>CBOMkit behaviour</th>
+                <th>SpringCryptoScanner rule</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td><span class="td-layer">L3</span></td>
+                <td>BCryptPasswordEncoder(4) inside @Bean method</td>
+                <td class="td-miss">❌ Not an instanceof() call — missed entirely</td>
+                <td style="color:#2ECC71">✅ Rule 1 — detects ObjectCreationExpr</td>
+            </tr>
+            <tr>
+                <td><span class="td-layer">L3</span></td>
+                <td>NimbusJwtDecoder.withSecretKey() without setJwsAlgorithms()</td>
+                <td class="td-miss">❌ Spring Security builder pattern — invisible to JCA scanner</td>
+                <td style="color:#2ECC71">✅ Rule 2 — detects missing whitelist</td>
+            </tr>
+            <tr>
+                <td><span class="td-layer">L2</span></td>
+                <td>@Convert(converter=AesEcbEncryptor.class) on entity field</td>
+                <td class="td-miss">❌ Annotation not traced to converter — algorithm unknown</td>
+                <td style="color:#2ECC71">✅ Rule 3 — detects @Convert on FieldDeclaration</td>
+            </tr>
+            <tr>
+                <td><span class="td-layer">L1</span></td>
+                <td>application.yml: key-store-type: JKS</td>
+                <td class="td-miss">❌ YAML not parsed — outside SonarQube Java plugin scope</td>
+                <td style="color:#2ECC71">✅ Rule 5 — parses YAML for crypto keywords</td>
+            </tr>
+            <tr>
+                <td><span class="td-layer">L1</span></td>
+                <td>jwt.secret: myWeakSecret123 (short secret)</td>
+                <td class="td-miss">❌ Config file not scanned</td>
+                <td style="color:#2ECC71">✅ Rule 5 — detects short secrets in config</td>
+            </tr>
+            <tr>
+                <td><span class="td-layer">L1</span></td>
+                <td>pom.xml: nimbus-jose-jwt CVE-affected version</td>
+                <td class="td-miss">❌ Dependency CVE mapping not implemented in CBOMkit</td>
+                <td style="color:#2ECC71">✅ Rule 6 — scans pom.xml for vulnerable deps</td>
+            </tr>
+            </tbody>
+        </table>
+
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<!-- TAB 3: CBOM JSON -->
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<div id="tab-cbom" class="tab-content">
+    <div class="main">
+        <div class="panel">
+            <h3>
+                CycloneDX 1.6 CBOM JSON — Full Output
+                <button class="copy-btn" onclick="copyCBOMFull()">Copy JSON</button>
+            </h3>
+            <div style="margin-bottom:12px;font-size:12px;color:#6B7A99">
+                This is the complete CycloneDX 1.6-compliant CBOM produced by SpringCryptoScanner.
+                Each finding includes a <strong style="color:#E8B84B">cbomkit-detects</strong> field
+                marking whether CBOMkit would have reported it.
+                Layer 1–3 findings all have <strong style="color:#E05C5C">cbomkit-detects: false</strong>.
+            </div>
+            <div class="cbom-box" id="cbomBoxFull" style="max-height:600px">
+                Run a scan on the Scanner tab to generate CBOM JSON
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<!-- SCRIPT -->
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<script>
+let lastScanData = null;
+
+// ── Tab switching ────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.target.classList.add('active');
+}
+
+// ── Path helpers ─────────────────────────────────────────────────────────────
+function setPath(p) {
+  document.getElementById('pathInput').value = p;
+}
+
+// ── Scan ─────────────────────────────────────────────────────────────────────
+async function runScan() {
+  const path = document.getElementById('pathInput').value.trim();
+  if (!path) return;
+
+  const btn     = document.getElementById('scanBtn');
+  const spinner = document.getElementById('spinner');
+  btn.disabled = true;
+  spinner.style.display = 'inline';
+  document.getElementById('emptyState').style.display = 'none';
+
+  try {
+    const res = await fetch('/api/scan', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path})
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert('Error: ' + (err.error || 'Scan failed'));
+      return;
+    }
+    const data = await res.json();
+    lastScanData = data;
+    renderScanner(data);
+    renderComparison(data);
+    renderCBOM(data);
+  } catch(e) {
+    alert('Scan failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    spinner.style.display = 'none';
+  }
+}
+
+// ── Render Scanner tab ────────────────────────────────────────────────────────
+function renderScanner(data) {
+  document.getElementById('statsGrid').style.display   = 'grid';
+  document.getElementById('mainPanels').style.display  = 'grid';
+  document.getElementById('emptyState').style.display  = 'none';
+
+  document.getElementById('statTotal').textContent        = data.totalFindings;
+  document.getElementById('statCritical').textContent     = data.critical;
+  document.getElementById('statQVuln').textContent        = data.quantumVulnerable;
+  document.getElementById('statCBOMkitMiss').textContent  = data.cbomkitWouldMiss;
+
+  // CBOMkit vs scanner bar
+  const cbomkitCount = data.layer4 || 0;
+  const total        = data.totalFindings || 0;
+  const maxW = Math.max(total, 1);
+  document.getElementById('cbomkitNum').textContent = cbomkitCount;
+  document.getElementById('scannerNum').textContent = total;
+  document.getElementById('cbomkitBar').style.width =
+    Math.round((cbomkitCount / maxW) * 100) + '%';
+
+  // Layer bars
+  const layers = [
+    {key:'layer3', label:'L3 — Spring Security Beans', color:'#E05C5C'},
+    {key:'layer2', label:'L2 — @Convert Field Encryption', color:'#F39C12'},
+    {key:'layer1', label:'L1 — Config Files / pom.xml', color:'#7B2FBE'},
+    {key:'layer4', label:'L4 — Raw JCA Calls', color:'#28A0A0'},
+  ];
+  const maxLayer = Math.max(...layers.map(l => data[l.key] || 0), 1);
+  document.getElementById('layerBars').innerHTML = layers.map(l => `
+    <div class="layer-bar">
+      <div class="layer-label">
+        <span>${l.label}</span>
+        <span style="color:${l.color};font-weight:600">${data[l.key] || 0}
+          ${l.key !== 'layer4' && (data[l.key]||0) > 0
+            ? '<span style="color:#E05C5C;font-size:10px"> ← CBOMkit misses</span>'
+            : l.key === 'layer4' && (data[l.key]||0) > 0
+              ? '<span style="color:#28A0A0;font-size:10px"> ← CBOMkit finds</span>'
+              : ''}
+        </span>
+      </div>
+      <div class="bar-bg">
+        <div class="bar-fill" style="width:${
+          Math.round(((data[l.key]||0)/maxLayer)*100)
+        }%;background:${l.color}"></div>
+      </div>
+    </div>
+  `).join('');
+
+  // Findings list
+  if (!data.findings || data.findings.length === 0) {
+    document.getElementById('findingsList').innerHTML =
+      '<div class="empty" style="color:#2ECC71">✅ No issues found</div>';
+  } else {
+    document.getElementById('findingsList').innerHTML =
+      data.findings.map(f => `
+        <div class="finding ${f.severity}">
+          <div class="f-rule">
+            <span class="badge ${severityBadge(f.severity)}">${f.severity}</span>
+            <span class="badge badge-blue">${f.layer}</span>
+            <span class="badge ${f.cbomkitDetects==='true'?'badge-found':'badge-miss'}">
+              ${f.cbomkitDetects==='true'?'CBOMkit ✓':'CBOMkit ✗ MISS'}
+            </span>
+            ${f.rule}
+          </div>
+          <div class="f-detail">${f.detail}</div>
+          <div class="f-meta">
+            📄 ${f.file}:${f.line} | Algorithm: <strong>${f.algorithm}</strong> |
+            Quantum: <span class="td-qs-${f.quantumStatus}">${f.quantumStatus}</span>
+            ${f.replacement && f.replacement !== 'See NIST PQC standards'
+              ? ` | Replace: <em style="color:#E8B84B">${f.replacement}</em>` : ''}
+          </div>
+        </div>`).join('');
+  }
+
+  // CBOM preview
+  try {
+    document.getElementById('cbomBoxScanner').textContent =
+      JSON.stringify(JSON.parse(data.cbomJson), null, 2);
+  } catch(e) {
+    document.getElementById('cbomBoxScanner').textContent = data.cbomJson || '{}';
+  }
+}
+
+// ── Render Comparison tab ────────────────────────────────────────────────────
+function renderComparison(data) {
+  // Hero numbers
+  const cbomkitFinds = data.layer4 || 0;
+  document.getElementById('cmpCBOMkitNum').textContent = cbomkitFinds;
+  document.getElementById('cmpScannerNum').textContent = data.totalFindings;
+
+  // Summary
+  const gap = data.cbomkitWouldMiss || 0;
+  document.getElementById('cmpSummary').innerHTML = `<p>
+    Scanned: <strong>${data.projectName}</strong> &nbsp;|&nbsp;
+    CBOMkit found: <strong style="color:#28A0A0">${cbomkitFinds}</strong>
+    cryptographic assets &nbsp;|&nbsp;
+    SpringCryptoScanner found: <strong style="color:#E05C5C">${data.totalFindings}</strong>
+    findings &nbsp;|&nbsp;
+    <strong style="color:#E8B84B">${gap} findings (${
+      data.totalFindings > 0
+        ? Math.round((gap/data.totalFindings)*100) : 0
+    }%) would be completely invisible to CBOMkit</strong>.
+    Every Layer 1–3 finding carries <code style="color:#E05C5C">cbomkit-detects: false</code>
+    in the CycloneDX CBOM output.
+  </p>`;
+
+  // Layer table
+  const layerDefs = [
+    {
+      lbl:'L4', name:'Raw JCA Calls',
+      ex:'MessageDigest.getInstance("SHA-1")',
+      cbomkit: data.layer4 || 0,
+      scanner: data.layer4 || 0,
+      gap: 'None — CBOMkit covers this layer'
+    },
+    {
+      lbl:'L3', name:'Spring Security @Bean',
+      ex:'new BCryptPasswordEncoder(4) / NimbusJwtDecoder.withSecretKey()',
+      cbomkit: 0,
+      scanner: data.layer3 || 0,
+      gap: 'Spring bean instantiation — not a JCA getInstance() call'
+    },
+    {
+      lbl:'L2', name:'Spring Data @Convert',
+      ex:'@Convert(converter=AesEncryptor.class) on entity field',
+      cbomkit: 0,
+      scanner: data.layer2 || 0,
+      gap: 'Annotation not traced into converter — algorithm invisible'
+    },
+    {
+      lbl:'L1', name:'Config Files + Maven',
+      ex:'application.yml: key-store-type: JKS / pom.xml CVE dependency',
+      cbomkit: 0,
+      scanner: data.layer1 || 0,
+      gap: 'YAML/properties not parsed by SonarQube Java plugin'
+    },
+  ];
+
+  document.getElementById('layerTableBody').innerHTML = layerDefs.map(l => `
+    <tr>
+      <td><span class="td-layer">${l.lbl}</span></td>
+      <td class="l-name">${l.name}</td>
+      <td style="font-size:11px;color:#6B7A99;font-style:italic">${l.ex}</td>
+      <td style="text-align:center">
+        ${l.cbomkit > 0
+          ? `<span class="td-found l-num">${l.cbomkit}</span>`
+          : `<span class="td-miss">✗ 0</span>`}
+      </td>
+      <td style="text-align:center">
+        <span class="${l.scanner>0?'td-found':'l-zero'} l-num">${l.scanner}</span>
+      </td>
+      <td style="font-size:11px;color:${l.cbomkit===0&&l.scanner>0?'#E05C5C':'#6B7A99'}">
+        ${l.cbomkit===0 && l.scanner > 0
+          ? `⚠️ ${l.gap}` : l.gap}
+      </td>
+    </tr>`).join('');
+
+  // Findings table
+  if (!data.findings || data.findings.length === 0) {
+    document.getElementById('cmpTableBody').innerHTML =
+      '<tr><td colspan="9" class="empty">No findings for this project</td></tr>';
+    return;
+  }
+
+  document.getElementById('cmpTableBody').innerHTML =
+    data.findings.map((f, i) => `
+      <tr>
+        <td style="color:#6B7A99">${i+1}</td>
+        <td style="font-family:'Courier New',monospace;font-size:11px;color:#CADCFC">
+          ${f.rule}</td>
+        <td><span class="td-layer">${f.layer}</span></td>
+        <td style="font-size:11px;color:#6B7A99">
+          ${f.file}<br><span style="color:#E8B84B">line ${f.line}</span></td>
+        <td style="font-weight:600;color:#CADCFC">${f.algorithm}</td>
+        <td class="td-sev-${f.severity}">${f.severity}</td>
+        <td class="td-qs-${f.quantumStatus}">
+          ${qsLabel(f.quantumStatus)}</td>
+        <td style="text-align:center">
+          ${f.cbomkitDetects === 'true'
+            ? '<span class="badge badge-found">✅ Yes</span>'
+            : '<span class="badge badge-miss">❌ No — MISS</span>'}
+        </td>
+        <td style="font-size:11px;color:#E8B84B">
+          ${f.replacement !== 'See NIST PQC standards' ? f.replacement : '—'}</td>
+      </tr>`).join('');
+
+  // Update banner
+  document.getElementById('cmpBanner').innerHTML = `
+    <strong>Last scan:</strong> ${data.projectName} &nbsp;|&nbsp;
+    Switch to the <strong>Scanner tab</strong> to scan a different project.
+    Try <strong>spring-security-samples ★</strong> to see the headline result:
+    CBOMkit = 0, SpringCryptoScanner = 2 CRITICAL.`;
+}
+
+// ── Render CBOM tab ──────────────────────────────────────────────────────────
+function renderCBOM(data) {
+  try {
+    document.getElementById('cbomBoxFull').textContent =
+      JSON.stringify(JSON.parse(data.cbomJson), null, 2);
+  } catch(e) {
+    document.getElementById('cbomBoxFull').textContent = data.cbomJson || '{}';
+  }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function severityBadge(s) {
+  return s==='CRITICAL'?'badge-red':s==='HIGH'?'badge-amber':'badge-teal';
+}
+
+function qsLabel(qs) {
+  if (qs === 'notQuantumSafe')    return '⚠️ Quantum-vulnerable (Shor\'s)';
+  if (qs === 'classicallyBroken') return '🔴 Classically broken';
+  if (qs === 'quantumSafe')       return '✅ Quantum-safe';
+  return '❓ Unknown';
+}
+
+function copyCBOM() {
+  const text = document.getElementById('cbomBoxScanner').textContent;
+  navigator.clipboard.writeText(text)
+    .then(() => alert('CBOM JSON copied to clipboard'));
+}
+
+function copyCBOMFull() {
+  const text = document.getElementById('cbomBoxFull').textContent;
+  navigator.clipboard.writeText(text)
+    .then(() => alert('CBOM JSON copied to clipboard'));
+}
+
+// Enter key triggers scan
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('pathInput')
+    .addEventListener('keypress', e => { if (e.key==='Enter') runScan(); });
+});
+</script>
+</body>
+</html>
