@@ -203,6 +203,8 @@ public class SpringCryptoScanner {
         static String resolveQuantumStatus(String algo) {
             if (algo == null || algo.isEmpty()) return "unknown";
             String up = algo.toUpperCase().trim();
+
+            // Direct match or prefix match
             for (Map.Entry<String, String> e : QUANTUM_STATUS.entrySet()) {
                 String key = e.getKey().toUpperCase();
                 if (up.equals(key) || up.startsWith(key + "/") || up.startsWith(key + "-")
@@ -210,6 +212,18 @@ public class SpringCryptoScanner {
                     return e.getValue();
                 }
             }
+
+            // Common algorithm families not in exact table
+            if (up.startsWith("HMAC")) return "quantumSafe";
+            if (up.startsWith("AES"))  return "quantumSafe";
+            if (up.startsWith("SHA-2") || up.startsWith("SHA-3") || up.startsWith("SHA2") || up.startsWith("SHA3")) return "quantumSafe";
+            if (up.startsWith("SHA-1") || up.equals("SHA1")) return "classicallyBroken";
+            if (up.startsWith("RSA"))  return "notQuantumSafe";
+            if (up.startsWith("EC") || up.startsWith("ECDSA") || up.startsWith("ECDH")) return "notQuantumSafe";
+            if (up.contains("JKS"))    return "quantumSafe"; // keystore format — not an algorithm
+            if (up.contains("TLS"))    return "quantumSafe"; // protocol
+            if (up.contains("OAUTH")) return "quantumSafe";  // framework concept
+
             return "unknown";
         }
 
@@ -251,6 +265,14 @@ public class SpringCryptoScanner {
         try (Stream<Path> paths = Files.walk(Paths.get(projectPath))) {
             paths.filter(p -> p.toString().endsWith(".java"))
                  .filter(p -> !p.getFileName().toString().equals("SpringCryptoScanner.java"))
+                 // Exclude test directories — CBOMkit scans production code only
+                 // Ensures scan scope matches CBOMkit for fair comparison
+                 .filter(p -> {
+                     String ps = p.toString().replace("\\", "/");
+                     return !ps.contains("/src/test/")
+                         && !ps.contains("/test/java/")
+                         && !ps.contains("/tests/");
+                 })
                  .forEach(p -> {
                      try { scanJavaFile(p.toFile()); }
                      catch (Exception e) { System.err.println("Could not parse: " + p); }
@@ -269,7 +291,15 @@ public class SpringCryptoScanner {
 
     private void scanJavaFile(File file) throws Exception {
         CompilationUnit cu   = StaticJavaParser.parse(new FileInputStream(file));
-        String          name = file.getName();
+        // Use relative path from project root so full package path is visible
+        // e.g. "src/main/java/com/example/security/SecurityConfiguration.java"
+        // instead of just "SecurityConfiguration.java"
+        String name;
+        try {
+            name = Paths.get(projectPath).relativize(file.toPath()).toString();
+        } catch (Exception e) {
+            name = file.getName();
+        }
         // Layer 3
         checkBCrypt(cu, name);
         checkJwtDecoder(cu, name);
@@ -610,7 +640,7 @@ public class SpringCryptoScanner {
                                 "Short secret (length=" + val.length() + ", min=32). " +
                                 "Must be >= 256 bits. Store in secrets manager, not config. " +
                                 "CBOMkit misses this (YAML not parsed by CBOMkit).",
-                                "L1-ConfigFile", "CRITICAL", "HMAC-secret"));
+                                "L1-ConfigFile", "CRITICAL", "HMACSHA256"));
                         }
                     }
                 }
@@ -689,6 +719,49 @@ public class SpringCryptoScanner {
         System.out.println("══════════════════════════════════════════════");
     }
 
+    /**
+     * Returns true only if CBOMkit would actually detect this finding.
+     *
+     * CBOMkit detects findings when:
+     *   - Layer is L4-RawJCA (CBOMkit only scans raw JCA calls)
+     *   - Severity is not INFO (CBOMkit only reports vulnerabilities, not inventory)
+     *   - Detection rule is a genuine JCA getInstance() or constructor call
+     *
+     * CBOMkit does NOT detect:
+     *   - CLASSICALLY_BROKEN_ALGORITHM_STRING  — plain string literal, not instanceof call
+     *   - QUANTUM_VULNERABLE_ALGORITHM_STRING  — plain string literal
+     *   - JWT_HMAC_ALGORITHM_DETECTED          — JJWT enum FieldAccessExpr
+     *   - QUANTUM_VULNERABLE_JWT_ALGORITHM     — JJWT enum FieldAccessExpr
+     *   - CRYPTOGRAPHIC_ASSET_DETECTED         — unclassified/INFO
+     *   - CRYPTOGRAPHIC_ASSET_INVENTORY        — INFO severity
+     *   - Anything at L1/L2/L3
+     */
+    private boolean isCBOMkitDetectable(Finding f) {
+        // Must be at Layer 4
+        if (!f.layer.equals("L4-RawJCA")) return false;
+        // Must be a vulnerability (not INFO inventory)
+        if (f.severity.equals("INFO")) return false;
+        // Must be a genuine JCA instanceof/constructor rule — not string literal or enum
+        switch (f.rule) {
+            case "QUANTUM_VULNERABLE_JCA_ALGORITHM":      // instanceof call ✅
+            case "CLASSICALLY_BROKEN_JCA_ALGORITHM":      // instanceof call ✅
+            case "INSECURE_CIPHER_MODE_ECB":              // instanceof call ✅
+            case "WEAK_AES_KEY_SIZE":                     // instanceof call ✅
+                return true;
+            // String literal rules — CBOMkit does NOT detect these
+            case "CLASSICALLY_BROKEN_ALGORITHM_STRING":   // plain string "md5" ❌
+            case "QUANTUM_VULNERABLE_ALGORITHM_STRING":   // plain string "RSA" ❌
+            // JJWT enum rules — CBOMkit has own JJWT rules but via different AST path
+            case "QUANTUM_VULNERABLE_JWT_ALGORITHM":      // SignatureAlgorithm.RS256 ❌
+            case "JWT_HMAC_ALGORITHM_DETECTED":           // SignatureAlgorithm.HS256 ❌
+            // Inventory/unknown
+            case "CRYPTOGRAPHIC_ASSET_DETECTED":          // unclassified ❌
+            case "CRYPTOGRAPHIC_ASSET_INVENTORY":         // INFO ❌
+            default:
+                return false;
+        }
+    }
+
     // ── Write CycloneDX 1.6 CBOM JSON ─────────────────────────────────────────
     private void writeCBOM(String outputPath) throws Exception {
         StringBuilder sb = new StringBuilder();
@@ -745,7 +818,13 @@ public class SpringCryptoScanner {
             sb.append("        {\"name\": \"source-line\",     \"value\": \"").append(f.line).append("\"},\n");
             sb.append("        {\"name\": \"pq-replacement\",  \"value\": \"").append(escapeJson(f.replacement)).append("\"},\n");
             sb.append("        {\"name\": \"cbomkit-detects\", \"value\": \"")
-              .append(f.layer.equals("L4-RawJCA") ? "true" : "false").append("\"}\n");
+              // CBOMkit detects a finding ONLY when ALL of these are true:
+              //   1. Layer is L4-RawJCA (raw JCA call)
+              //   2. Severity is not INFO (vulnerable algorithm, not inventory)
+              //   3. Detection rule is a genuine JCA getInstance() or constructor call
+              //      NOT a plain string literal or JJWT enum (CBOMkit doesn't match those)
+              .append(isCBOMkitDetectable(f) ? "true" : "false")
+              .append("\"}\n");
             sb.append("      ]\n");
             sb.append("    }");
             if (i < findings.size() - 1) sb.append(",");
