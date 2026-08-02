@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SpringCryptoScanner — IIT Jodhpur</title>
-    <style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpringCryptoScanner — IIT Jodhpur</title>
+  <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
            background: #0D1B4B; color: #fff; min-height: 100vh; }
@@ -194,281 +194,305 @@
 
 <!-- Header -->
 <div class="header">
-    <h1>🔍 SpringCryptoScanner — Thesis Tool v2.0</h1>
-    <p>Spring Security-aware Cryptographic Asset Discovery | CycloneDX 1.6 CBOM Output</p>
-    <small>M.Tech Thesis — Kandasamy S | IIT Jodhpur | Supervisor: Dr. Bimal Mandal</small>
+  <h1>🔍 SpringCryptoScanner — Thesis Tool v2.0</h1>
+  <p>Spring Security-aware Cryptographic Asset Discovery | CycloneDX 1.6 CBOM Output</p>
+  <small>M.Tech Thesis — Kandasamy S | IIT Jodhpur | Supervisor: Dr. Bimal Mandal</small>
 </div>
 
 <!-- Tab bar -->
 <div class="tabs">
-    <div class="tab active" onclick="switchTab('scanner')">🔍 Scanner</div>
-    <div class="tab" onclick="switchTab('comparison')">⚖️ CBOMkit vs SpringCryptoScanner</div>
-    <div class="tab" onclick="switchTab('cbom')">📄 CBOM JSON</div>
+  <div class="tab active" onclick="switchTab('scanner')">🔍 Scanner</div>
+  <div class="tab" onclick="switchTab('comparison')">⚖️ CBOMkit vs SpringCryptoScanner</div>
+  <div class="tab" onclick="switchTab('cbom')">📄 CBOM JSON</div>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 <!-- TAB 1: SCANNER -->
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 <div id="tab-scanner" class="tab-content active">
-    <div class="main">
+<div class="main">
 
-        <div class="scan-box">
-            <h2>📁 SCAN A SPRING BOOT PROJECT</h2>
-            <div class="scan-row">
-                <input id="pathInput" type="text"
-                       placeholder="Enter absolute path — e.g. /Users/apple/thesis/crypto-gap-test"
-                       value="/Users/apple/thesis/crypto-gap-test"/>
-                <button class="scan-btn" id="scanBtn" onclick="runScan()">▶ Scan</button>
-                <span class="spinner" id="spinner">⏳ Scanning...</span>
-            </div>
-            <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                <small style="color:#6B7A99">Quick select:</small>
-                <button class="quick-btn"
-                        onclick="setPath('/Users/apple/thesis/crypto-gap-test')">
-                    crypto-gap-test (test project)</button>
-                <button class="quick-btn"
-                        onclick="setPath('/Users/apple/thesis/dataset/projects/spring-security-samples')">
-                    spring-security-samples ★</button>
-                <button class="quick-btn"
-                        onclick="setPath('/Users/apple/thesis/dataset/projects/tutorials')">
-                    tutorials (Baeldung) ●</button>
-            </div>
-        </div>
-
-        <!-- Stats -->
-        <div class="stats-grid" id="statsGrid" style="display:none">
-            <div class="stat-card">
-                <div class="stat-num" style="color:#fff" id="statTotal">0</div>
-                <div class="stat-label">Total Findings</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-num" style="color:#E05C5C" id="statCritical">0</div>
-                <div class="stat-label">CRITICAL</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-num" style="color:#E05C5C" id="statQVuln">0</div>
-                <div class="stat-label">Quantum-Vulnerable (Shor's)</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-num" style="color:#F39C12" id="statCBOMkitMiss">0</div>
-                <div class="stat-label">CBOMkit Would Miss</div>
-            </div>
-        </div>
-
-        <!-- Main panels -->
-        <div class="row2" id="mainPanels" style="display:none">
-            <div class="panel">
-                <h3>Findings</h3>
-                <div class="cbomkit-compare">
-                    <h4>⚖️ CBOMkit vs SpringCryptoScanner</h4>
-                    <div class="compare-row">
-                        <div class="compare-tool">CBOMkit 2.2.0</div>
-                        <div class="compare-num" style="color:#E05C5C" id="cbomkitNum">0</div>
-                        <div class="compare-bar">
-                            <div class="compare-fill" id="cbomkitBar"
-                                 style="width:0%;background:#E05C5C"></div>
-                        </div>
-                    </div>
-                    <div class="compare-row">
-                        <div class="compare-tool">SpringCryptoScanner</div>
-                        <div class="compare-num" style="color:#2ECC71" id="scannerNum">0</div>
-                        <div class="compare-bar">
-                            <div class="compare-fill" id="scannerBar"
-                                 style="width:100%;background:#2ECC71"></div>
-                        </div>
-                    </div>
-                </div>
-                <div id="findingsList">
-                    <div class="empty">Run a scan to see findings</div>
-                </div>
-            </div>
-
-            <div style="display:flex;flex-direction:column;gap:16px">
-                <div class="panel">
-                    <h3>Layer Coverage</h3>
-                    <div id="layerBars">
-                        <div class="empty">Run a scan to see layer breakdown</div>
-                    </div>
-                </div>
-                <div class="panel">
-                    <h3>CycloneDX 1.6 CBOM (preview)
-                        <button class="copy-btn" onclick="copyCBOM()">Copy JSON</button>
-                    </h3>
-                    <div class="cbom-box" id="cbomBoxScanner">
-                        Run a scan to generate CBOM JSON
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="empty" id="emptyState">
-            Enter a Spring Boot project path above and click Scan
-        </div>
+  <div class="scan-box">
+    <h2>📁 SCAN A SPRING BOOT PROJECT — Local Path or GitHub URL</h2>
+    <div class="scan-row">
+      <input id="pathInput" type="text"
+        placeholder="Enter local path OR GitHub URL — e.g. https://github.com/spring-projects/spring-security-samples"
+        value="https://github.com/spring-projects/spring-security-samples"/>
+      <button class="scan-btn" id="scanBtn" onclick="runScan()">▶ Scan</button>
+      <span class="spinner" id="spinner" style="display:none">⏳ <span id="spinnerText">Scanning...</span></span>
     </div>
+    <div style="margin-top:8px;font-size:11px;color:#6B7A99;">
+      💡 Paste any public GitHub URL — the tool will clone and scan it automatically.
+      Or enter a local folder path if the project is already on your machine.
+    </div>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <small style="color:#6B7A99">📌 Local:</small>
+      <button class="quick-btn"
+        onclick="setPath('/Users/apple/thesis/crypto-gap-test')">
+        crypto-gap-test (controlled test)</button>
+      <button class="quick-btn"
+        onclick="setPath('/Users/apple/thesis/dataset/projects/tutorials')">
+        tutorials (Baeldung) ●</button>
+    </div>
+    <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <small style="color:#6B7A99">🐙 GitHub:</small>
+      <button class="quick-btn"
+        onclick="setPath('https://github.com/spring-projects/spring-security-samples')">
+        spring-security-samples ★</button>
+      <button class="quick-btn"
+        onclick="setPath('https://github.com/murraco/spring-boot-jwt')">
+        spring-boot-jwt</button>
+      <button class="quick-btn"
+        onclick="setPath('https://github.com/ali-bouali/spring-boot-3-jwt-security')">
+        ali-bouali JWT security</button>
+      <button class="quick-btn"
+        onclick="setPath('https://github.com/spring-projects/spring-petclinic')">
+        spring-petclinic</button>
+      <button class="quick-btn"
+        onclick="setPath('https://github.com/sqshq/piggymetrics')">
+        piggymetrics</button>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-grid" id="statsGrid" style="display:none">
+    <div class="stat-card">
+      <div class="stat-num" style="color:#fff" id="statTotal">0</div>
+      <div class="stat-label">Total Findings</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" style="color:#E05C5C" id="statCritical">0</div>
+      <div class="stat-label">CRITICAL</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" style="color:#E05C5C" id="statQVuln">0</div>
+      <div class="stat-label">Quantum-Vulnerable (Shor's)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" style="color:#F39C12" id="statCBOMkitMiss">0</div>
+      <div class="stat-label">CBOMkit Would Miss</div>
+    </div>
+  </div>
+
+  <!-- Main panels -->
+  <div class="row2" id="mainPanels" style="display:none">
+    <div class="panel">
+      <h3>Findings</h3>
+      <div class="cbomkit-compare">
+        <h4>⚖️ CBOMkit vs SpringCryptoScanner</h4>
+        <div class="compare-row">
+          <div class="compare-tool">CBOMkit 2.2.0</div>
+          <div class="compare-num" style="color:#E05C5C" id="cbomkitNum">0</div>
+          <div class="compare-bar">
+            <div class="compare-fill" id="cbomkitBar"
+                 style="width:0%;background:#E05C5C"></div>
+          </div>
+        </div>
+        <div class="compare-row">
+          <div class="compare-tool">SpringCryptoScanner</div>
+          <div class="compare-num" style="color:#2ECC71" id="scannerNum">0</div>
+          <div class="compare-bar">
+            <div class="compare-fill" id="scannerBar"
+                 style="width:100%;background:#2ECC71"></div>
+          </div>
+        </div>
+      </div>
+      <div id="findingsList">
+        <div class="empty">Run a scan to see findings</div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div class="panel">
+        <h3>Layer Coverage</h3>
+        <div id="layerBars">
+          <div class="empty">Run a scan to see layer breakdown</div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>CycloneDX 1.6 CBOM (preview)
+          <button class="copy-btn" onclick="copyCBOM()" style="margin-right:4px">Copy</button>
+          <button class="copy-btn" onclick="downloadCBOM()" style="background:#2ECC71;color:#0D1B4B">⬇ Download</button>
+        </h3>
+        <div class="cbom-box" id="cbomBoxScanner">
+          Run a scan to generate CBOM JSON
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="empty" id="emptyState">
+    Enter a Spring Boot project path above and click Scan
+  </div>
+</div>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 <!-- TAB 2: COMPARISON -->
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 <div id="tab-comparison" class="tab-content">
-    <div class="main">
+<div class="main">
 
-        <div class="info-banner" id="cmpBanner">
-            <strong>How to use:</strong> Run a scan on the Scanner tab first,
-            then return here to see the full comparison.
-            The <strong>spring-security-samples ★</strong> project gives the most
-            compelling result — CBOMkit reports 0, SpringCryptoScanner finds 2 CRITICAL.
-        </div>
+  <div class="info-banner" id="cmpBanner">
+    <strong>How to use:</strong> Run a scan on the Scanner tab first — paste any
+    <strong>GitHub URL</strong> or local path — then return here to see the full comparison.
+    The <strong>spring-security-samples ★</strong> project gives the most compelling result:
+    CBOMkit = 0, SpringCryptoScanner = 2 CRITICAL.
+  </div>
 
-        <!-- Hero numbers -->
-        <div class="cmp-hero">
-            <div class="cmp-tool-card cbomkit">
-                <div class="cmp-tool-name">CBOMkit 2.2.0 (IBM / Linux Foundation PQCA)</div>
-                <div class="cmp-tool-num" id="cmpCBOMkitNum">—</div>
-                <div class="cmp-tool-sub">cryptographic assets found</div>
-                <div style="margin-top:12px;font-size:11px;color:#6B7A99">
-                    Detects: Layer 4 (raw JCA calls) only<br>
-                    Misses: Spring Security beans, @Convert, YAML config
-                </div>
-            </div>
-            <div class="cmp-tool-card scanner">
-                <div class="cmp-tool-name">SpringCryptoScanner v2.0 (This Thesis)</div>
-                <div class="cmp-tool-num" id="cmpScannerNum">—</div>
-                <div class="cmp-tool-sub">cryptographic findings detected</div>
-                <div style="margin-top:12px;font-size:11px;color:#6B7A99">
-                    Detects: All 4 layers — JCA + Spring Security + @Convert + YAML<br>
-                    Output: CycloneDX 1.6 CBOM JSON
-                </div>
-            </div>
-        </div>
-
-        <!-- Summary box -->
-        <div class="cmp-summary" id="cmpSummary">
-            <p>
-                Run a scan on the Scanner tab to populate this comparison.
-                The table below will show every finding, which tool detected it,
-                and the quantum safety classification.
-            </p>
-        </div>
-
-        <!-- Layer breakdown table -->
-        <div class="cmp-section">📊 Layer-by-Layer Coverage</div>
-        <table class="layer-table" id="layerTable">
-            <thead>
-            <tr>
-                <th>Layer</th>
-                <th>Description</th>
-                <th>Example</th>
-                <th style="text-align:center">CBOMkit</th>
-                <th style="text-align:center">SpringCryptoScanner</th>
-                <th>Coverage Gap</th>
-            </tr>
-            </thead>
-            <tbody id="layerTableBody">
-            <tr>
-                <td colspan="6" class="empty">Run a scan to populate</td>
-            </tr>
-            </tbody>
-        </table>
-
-        <!-- Detailed findings comparison table -->
-        <div class="cmp-section">🔍 Finding-by-Finding Comparison</div>
-        <div class="cmp-table-wrap">
-            <table class="cmp" id="cmpTable">
-                <thead>
-                <tr>
-                    <th>#</th>
-                    <th>Detection Rule</th>
-                    <th>Layer</th>
-                    <th>File : Line</th>
-                    <th>Algorithm</th>
-                    <th>Severity</th>
-                    <th>Quantum Status</th>
-                    <th style="text-align:center">CBOMkit Detects?</th>
-                    <th>PQ Replacement</th>
-                </tr>
-                </thead>
-                <tbody id="cmpTableBody">
-                <tr><td colspan="9" class="empty">Run a scan to populate</td></tr>
-                </tbody>
-            </table>
-        </div>
-
-        <!-- What CBOMkit misses — static explanation -->
-        <div class="cmp-section">❌ Why CBOMkit Misses Layers 1–3</div>
-        <table class="cmp">
-            <thead>
-            <tr>
-                <th>Layer</th>
-                <th>Spring Boot Pattern</th>
-                <th>CBOMkit behaviour</th>
-                <th>SpringCryptoScanner rule</th>
-            </tr>
-            </thead>
-            <tbody>
-            <tr>
-                <td><span class="td-layer">L3</span></td>
-                <td>BCryptPasswordEncoder(4) inside @Bean method</td>
-                <td class="td-miss">❌ Not an instanceof() call — missed entirely</td>
-                <td style="color:#2ECC71">✅ Rule 1 — detects ObjectCreationExpr</td>
-            </tr>
-            <tr>
-                <td><span class="td-layer">L3</span></td>
-                <td>NimbusJwtDecoder.withSecretKey() without setJwsAlgorithms()</td>
-                <td class="td-miss">❌ Spring Security builder pattern — invisible to JCA scanner</td>
-                <td style="color:#2ECC71">✅ Rule 2 — detects missing whitelist</td>
-            </tr>
-            <tr>
-                <td><span class="td-layer">L2</span></td>
-                <td>@Convert(converter=AesEcbEncryptor.class) on entity field</td>
-                <td class="td-miss">❌ Annotation not traced to converter — algorithm unknown</td>
-                <td style="color:#2ECC71">✅ Rule 3 — detects @Convert on FieldDeclaration</td>
-            </tr>
-            <tr>
-                <td><span class="td-layer">L1</span></td>
-                <td>application.yml: key-store-type: JKS</td>
-                <td class="td-miss">❌ YAML not parsed — outside SonarQube Java plugin scope</td>
-                <td style="color:#2ECC71">✅ Rule 5 — parses YAML for crypto keywords</td>
-            </tr>
-            <tr>
-                <td><span class="td-layer">L1</span></td>
-                <td>jwt.secret: myWeakSecret123 (short secret)</td>
-                <td class="td-miss">❌ Config file not scanned</td>
-                <td style="color:#2ECC71">✅ Rule 5 — detects short secrets in config</td>
-            </tr>
-            <tr>
-                <td><span class="td-layer">L1</span></td>
-                <td>pom.xml: nimbus-jose-jwt CVE-affected version</td>
-                <td class="td-miss">❌ Dependency CVE mapping not implemented in CBOMkit</td>
-                <td style="color:#2ECC71">✅ Rule 6 — scans pom.xml for vulnerable deps</td>
-            </tr>
-            </tbody>
-        </table>
-
+  <!-- Hero numbers -->
+  <div class="cmp-hero">
+    <div class="cmp-tool-card cbomkit">
+      <div class="cmp-tool-name">CBOMkit 2.2.0 (IBM / Linux Foundation PQCA)</div>
+      <div class="cmp-tool-num" id="cmpCBOMkitNum">—</div>
+      <div class="cmp-tool-sub">cryptographic assets found</div>
+      <div style="margin-top:12px;font-size:11px;color:#6B7A99">
+        Detects: Layer 4 (raw JCA calls) only<br>
+        Misses: Spring Security beans, @Convert, YAML config
+      </div>
     </div>
+    <div class="cmp-tool-card scanner">
+      <div class="cmp-tool-name">SpringCryptoScanner v2.0 (This Thesis)</div>
+      <div class="cmp-tool-num" id="cmpScannerNum">—</div>
+      <div class="cmp-tool-sub">cryptographic findings detected</div>
+      <div style="margin-top:12px;font-size:11px;color:#6B7A99">
+        Detects: All 4 layers — JCA + Spring Security + @Convert + YAML<br>
+        Output: CycloneDX 1.6 CBOM JSON
+      </div>
+    </div>
+  </div>
+
+  <!-- Summary box -->
+  <div class="cmp-summary" id="cmpSummary">
+    <p>
+      Run a scan on the Scanner tab to populate this comparison.
+      The table below will show every finding, which tool detected it,
+      and the quantum safety classification.
+    </p>
+  </div>
+
+  <!-- Layer breakdown table -->
+  <div class="cmp-section">📊 Layer-by-Layer Coverage</div>
+  <table class="layer-table" id="layerTable">
+    <thead>
+      <tr>
+        <th>Layer</th>
+        <th>Description</th>
+        <th>Example</th>
+        <th style="text-align:center">CBOMkit</th>
+        <th style="text-align:center">SpringCryptoScanner</th>
+        <th>Coverage Gap</th>
+      </tr>
+    </thead>
+    <tbody id="layerTableBody">
+      <tr>
+        <td colspan="6" class="empty">Run a scan to populate</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Detailed findings comparison table -->
+  <div class="cmp-section">🔍 Finding-by-Finding Comparison</div>
+  <div class="cmp-table-wrap">
+    <table class="cmp" id="cmpTable">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Detection Rule</th>
+          <th>Layer</th>
+          <th>File : Line</th>
+          <th>Algorithm</th>
+          <th>Severity</th>
+          <th>Quantum Status</th>
+          <th style="text-align:center">CBOMkit Detects?</th>
+          <th>PQ Replacement</th>
+        </tr>
+      </thead>
+      <tbody id="cmpTableBody">
+        <tr><td colspan="9" class="empty">Run a scan to populate</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- What CBOMkit misses — static explanation -->
+  <div class="cmp-section">❌ Why CBOMkit Misses Layers 1–3</div>
+  <table class="cmp">
+    <thead>
+      <tr>
+        <th>Layer</th>
+        <th>Spring Boot Pattern</th>
+        <th>CBOMkit behaviour</th>
+        <th>SpringCryptoScanner rule</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="td-layer">L3</span></td>
+        <td>BCryptPasswordEncoder(4) inside @Bean method</td>
+        <td class="td-miss">❌ Not an instanceof() call — missed entirely</td>
+        <td style="color:#2ECC71">✅ Rule 1 — detects ObjectCreationExpr</td>
+      </tr>
+      <tr>
+        <td><span class="td-layer">L3</span></td>
+        <td>NimbusJwtDecoder.withSecretKey() without setJwsAlgorithms()</td>
+        <td class="td-miss">❌ Spring Security builder pattern — invisible to JCA scanner</td>
+        <td style="color:#2ECC71">✅ Rule 2 — detects missing whitelist</td>
+      </tr>
+      <tr>
+        <td><span class="td-layer">L2</span></td>
+        <td>@Convert(converter=AesEcbEncryptor.class) on entity field</td>
+        <td class="td-miss">❌ Annotation not traced to converter — algorithm unknown</td>
+        <td style="color:#2ECC71">✅ Rule 3 — detects @Convert on FieldDeclaration</td>
+      </tr>
+      <tr>
+        <td><span class="td-layer">L1</span></td>
+        <td>application.yml: key-store-type: JKS</td>
+        <td class="td-miss">❌ YAML not parsed — outside SonarQube Java plugin scope</td>
+        <td style="color:#2ECC71">✅ Rule 5 — parses YAML for crypto keywords</td>
+      </tr>
+      <tr>
+        <td><span class="td-layer">L1</span></td>
+        <td>jwt.secret: myWeakSecret123 (short secret)</td>
+        <td class="td-miss">❌ Config file not scanned</td>
+        <td style="color:#2ECC71">✅ Rule 5 — detects short secrets in config</td>
+      </tr>
+      <tr>
+        <td><span class="td-layer">L1</span></td>
+        <td>pom.xml: nimbus-jose-jwt CVE-affected version</td>
+        <td class="td-miss">❌ Dependency CVE mapping not implemented in CBOMkit</td>
+        <td style="color:#2ECC71">✅ Rule 6 — scans pom.xml for vulnerable deps</td>
+      </tr>
+    </tbody>
+  </table>
+
+</div>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 <!-- TAB 3: CBOM JSON -->
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 <div id="tab-cbom" class="tab-content">
-    <div class="main">
-        <div class="panel">
-            <h3>
-                CycloneDX 1.6 CBOM JSON — Full Output
-                <button class="copy-btn" onclick="copyCBOMFull()">Copy JSON</button>
-            </h3>
-            <div style="margin-bottom:12px;font-size:12px;color:#6B7A99">
-                This is the complete CycloneDX 1.6-compliant CBOM produced by SpringCryptoScanner.
-                Each finding includes a <strong style="color:#E8B84B">cbomkit-detects</strong> field
-                marking whether CBOMkit would have reported it.
-                Layer 1–3 findings all have <strong style="color:#E05C5C">cbomkit-detects: false</strong>.
-            </div>
-            <div class="cbom-box" id="cbomBoxFull" style="max-height:600px">
-                Run a scan on the Scanner tab to generate CBOM JSON
-            </div>
-        </div>
+<div class="main">
+  <div class="panel">
+    <h3>
+      CycloneDX 1.6 CBOM JSON — Full Output
+      <button class="copy-btn" onclick="copyCBOMFull()" style="margin-right:6px">Copy JSON</button>
+      <button class="copy-btn" onclick="downloadCBOM()" style="background:#2ECC71;color:#0D1B4B">⬇ Download JSON</button>
+    </h3>
+    <div style="margin-bottom:12px;font-size:12px;color:#6B7A99">
+      This is the complete CycloneDX 1.6-compliant CBOM produced by SpringCryptoScanner.
+      Each finding includes a <strong style="color:#E8B84B">cbomkit-detects</strong> field
+      marking whether CBOMkit would have reported it.
+      Layer 1–3 findings all have <strong style="color:#E05C5C">cbomkit-detects: false</strong>.
     </div>
+    <div id="cbomFilename" style="font-size:11px;color:#6B7A99;margin-bottom:8px;display:none">
+      📄 File: <span id="cbomFilenameText">cbom-springscanner.json</span>
+    </div>
+    <div class="cbom-box" id="cbomBoxFull" style="max-height:600px">
+      Run a scan on the Scanner tab to generate CBOM JSON
+    </div>
+  </div>
+</div>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
@@ -497,8 +521,17 @@ async function runScan() {
 
   const btn     = document.getElementById('scanBtn');
   const spinner = document.getElementById('spinner');
+  const spinnerText = document.getElementById('spinnerText');
+
   btn.disabled = true;
   spinner.style.display = 'inline';
+
+  // Show different message for GitHub URLs
+  const isGitHub = path.startsWith('https://github.com/') || path.startsWith('http://github.com/');
+  spinnerText.textContent = isGitHub
+    ? 'Cloning from GitHub and scanning... (30–60s)'
+    : 'Scanning...';
+
   document.getElementById('emptyState').style.display = 'none';
 
   try {
@@ -721,12 +754,16 @@ function renderComparison(data) {
 
 // ── Render CBOM tab ──────────────────────────────────────────────────────────
 function renderCBOM(data) {
-  try {
-    document.getElementById('cbomBoxFull').textContent =
-      JSON.stringify(JSON.parse(data.cbomJson), null, 2);
-  } catch(e) {
-    document.getElementById('cbomBoxFull').textContent = data.cbomJson || '{}';
-  }
+  let pretty = data.cbomJson || '{}';
+  try { pretty = JSON.stringify(JSON.parse(data.cbomJson), null, 2); } catch(e) {}
+
+  document.getElementById('cbomBoxFull').textContent = pretty;
+
+  // Show filename
+  const projectName = (data.projectName || 'project').replace(/[^a-zA-Z0-9_-]/g,'-');
+  const filename = `cbom-springscanner-${projectName}.json`;
+  document.getElementById('cbomFilenameText').textContent = filename;
+  document.getElementById('cbomFilename').style.display = 'block';
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -751,6 +788,30 @@ function copyCBOMFull() {
   const text = document.getElementById('cbomBoxFull').textContent;
   navigator.clipboard.writeText(text)
     .then(() => alert('CBOM JSON copied to clipboard'));
+}
+
+function downloadCBOM() {
+  const text = document.getElementById('cbomBoxFull').textContent
+             || document.getElementById('cbomBoxScanner').textContent;
+  if (!text || text.trim().startsWith('Run a scan')) {
+    alert('Run a scan first to generate CBOM JSON.');
+    return;
+  }
+  // Build filename from project name
+  const projectName = lastScanData
+    ? (lastScanData.projectName || 'project').replace(/[^a-zA-Z0-9_-]/g,'-')
+    : 'project';
+  const filename = `cbom-springscanner-${projectName}.json`;
+
+  const blob = new Blob([text], {type: 'application/json'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // Enter key triggers scan
