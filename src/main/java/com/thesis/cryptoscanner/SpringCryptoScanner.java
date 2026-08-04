@@ -741,22 +741,17 @@ public class SpringCryptoScanner {
         if (!f.layer.equals("L4-RawJCA")) return false;
         // Must be a vulnerability (not INFO inventory)
         if (f.severity.equals("INFO")) return false;
-        // Must be a genuine JCA instanceof/constructor rule — not string literal or enum
+        // Must NOT be in a test file — CBOMkit scans production code only
+        String fp = f.file.replace("\\", "/");
+        if (fp.contains("/src/test/") || fp.contains("/test/java/")
+            || fp.endsWith("Test.java") || fp.endsWith("Tests.java")) return false;
+        // Must be a genuine JCA getInstance() or constructor rule
         switch (f.rule) {
-            case "QUANTUM_VULNERABLE_JCA_ALGORITHM":      // instanceof call ✅
-            case "CLASSICALLY_BROKEN_JCA_ALGORITHM":      // instanceof call ✅
-            case "INSECURE_CIPHER_MODE_ECB":              // instanceof call ✅
-            case "WEAK_AES_KEY_SIZE":                     // instanceof call ✅
+            case "QUANTUM_VULNERABLE_JCA_ALGORITHM":
+            case "CLASSICALLY_BROKEN_JCA_ALGORITHM":
+            case "INSECURE_CIPHER_MODE_ECB":
+            case "WEAK_AES_KEY_SIZE":
                 return true;
-            // String literal rules — CBOMkit does NOT detect these
-            case "CLASSICALLY_BROKEN_ALGORITHM_STRING":   // plain string "md5" ❌
-            case "QUANTUM_VULNERABLE_ALGORITHM_STRING":   // plain string "RSA" ❌
-            // JJWT enum rules — CBOMkit has own JJWT rules but via different AST path
-            case "QUANTUM_VULNERABLE_JWT_ALGORITHM":      // SignatureAlgorithm.RS256 ❌
-            case "JWT_HMAC_ALGORITHM_DETECTED":           // SignatureAlgorithm.HS256 ❌
-            // Inventory/unknown
-            case "CRYPTOGRAPHIC_ASSET_DETECTED":          // unclassified ❌
-            case "CRYPTOGRAPHIC_ASSET_INVENTORY":         // INFO ❌
             default:
                 return false;
         }
