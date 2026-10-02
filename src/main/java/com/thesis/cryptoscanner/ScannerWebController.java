@@ -109,42 +109,10 @@ public class ScannerWebController {
             long infoInventory = all.stream()
                 .filter(f -> f.severity.equals("INFO")).count();
 
-            // ============================================================================
-            // FINAL FIX: Calculate cbomkitWouldMiss correctly
-            // ============================================================================
-            //
-            // CORRECT FORMULA:
-            //   CBOMkit Would Miss = Scanner Findings - CBOMkit Actual Findings
-            //
-            // Since SpringCryptoScanner and CBOMkit are separate tools:
-            //   - SpringCryptoScanner finds cryptographic patterns at L1-L4
-            //   - CBOMkit scans separately and reports its findings
-            //   - CBOMkit consistently finds 0 findings in your thesis projects
-            //
-            // Therefore:
-            //   CBOMkit Would Miss = All Scanner Findings
-            //                      = 19 (for spring-authorization-server)
-            //                      = 2 (for spring-cloud-alibaba)
-            //                      = 6 (for spring-security-samples)
-            //                      etc.
-            //
-            // This is the SIMPLEST and MOST CORRECT formula:
-            // No heuristics, no assumptions about "what CBOMkit could detect"
-            // Just: Scanner findings - CBOMkit actual findings (0) = Scanner findings
-
-            long cbomkitWouldMiss = all.size();
-
-            // DEBUG: Verify calculation
-            System.out.println("DEBUG CBOMkit Gap Analysis (FINAL FIX):");
-            System.out.println("  Total findings (SpringCryptoScanner): " + all.size());
-            System.out.println("  CBOMkit actual findings: 0");
-            System.out.println("  CBOMkit Would Miss: " + cbomkitWouldMiss);
-            System.out.println("  Gap: 100% (all findings at L1-L4 framework level)");
-            System.out.println("  Layer breakdown:");
-            System.out.println("    L1: " + all.stream().filter(f -> f.layer.startsWith("L1")).count());
-            System.out.println("    L2: " + all.stream().filter(f -> f.layer.startsWith("L2")).count());
-            System.out.println("    L3: " + all.stream().filter(f -> f.layer.startsWith("L3")).count());
-            System.out.println("    L4: " + all.stream().filter(f -> f.layer.startsWith("L4")).count());
+            // Findings produced by JCA calls that CBOMkit's rules cover are flagged cbomkitExpected.
+            // Everything else is outside CBOMkit's rules. Whether CBOMkit actually reports the
+            // expected ones depends on its module detection and must be checked against its output.
+            long outsideCbomkitRules = all.stream().filter(f -> !f.cbomkitExpected).count();
 
             // ── Build response ────────────────────────────────────────────────
             Map<String, Object> result = new LinkedHashMap<>();
@@ -169,7 +137,14 @@ public class ScannerWebController {
             result.put("quantumSafe",       all.stream().filter(f -> "quantumSafe".equals(f.quantumStatus)).count());
 
             // CBOMkit gap — CORRECTED VALUE
-            result.put("cbomkitWouldMiss",  cbomkitWouldMiss);
+            result.put("cbomkitWouldMiss",  outsideCbomkitRules);   // kept for the UI; = outside CBOMkit's JCA rules
+            result.put("cbomkitExpected",   all.size() - outsideCbomkitRules);
+            result.put("javaFilesScanned",  scanner.getJavaFilesScanned());
+            result.put("parseFailures",     scanner.getParseFailures());
+            result.put("byContext",         Map.of(
+                "main",   all.stream().filter(f -> "main".equals(f.context)).count(),
+                "sample", all.stream().filter(f -> "sample".equals(f.context)).count(),
+                "docs",   all.stream().filter(f -> "docs".equals(f.context)).count()));
 
             // Layer breakdown
             result.put("layer1",            all.stream().filter(f -> f.layer.startsWith("L1")).count());
@@ -196,8 +171,8 @@ public class ScannerWebController {
                 fm.put("quantumStatus",  f.quantumStatus);
                 fm.put("detail",         f.detail);
                 fm.put("replacement",    f.replacement);
-                // CBOMkit finds 0, so all findings are missed
-                fm.put("cbomkitDetects", "false");
+                fm.put("context",        f.context);
+                fm.put("cbomkitDetects", String.valueOf(f.cbomkitExpected)); // expected from JCA rule coverage
                 findingsList.add(fm);
             }
             result.put("findings", findingsList);

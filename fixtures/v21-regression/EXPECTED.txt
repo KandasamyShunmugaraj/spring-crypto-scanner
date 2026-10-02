@@ -1,0 +1,14 @@
+[CRITICAL] [L1-ConfigFile] [main] WEAK_SECRET_IN_CONFIG @ src/main/resources/application.properties:6
+[CRITICAL] [L1-ConfigFile] [main] WEAK_SECRET_IN_CONFIG @ src/main/resources/application.yml:4
+[CRITICAL] [L3-SpringSecurityBean] [main] JWT_DECODER_SIGNATURE_ALGORITHM @ src/main/java/demo/JwtConfig.java:8
+[CRITICAL] [L3-SpringSecurityBean] [main] JWT_DECODER_SIGNATURE_ALGORITHM @ src/main/java/demo/JwtConfig.java:9
+[CRITICAL] [L3-SpringSecurityBean] [main] PLAINTEXT_PASSWORD_STORAGE @ src/main/java/demo/Shiro.java:6
+[CRITICAL] [L4-RawJCA] [main] HARDCODED_CRYPTO_KEY @ src/main/java/demo/TokenUtil.java:7
+[CRITICAL] [L4-RawJCA] [main] INSECURE_CIPHER_MODE_ECB @ src/main/java/demo/CardEncryptor.java:4
+[HIGH] [L1-ConfigFile] [main] DEPRECATED_TLS_VERSION @ src/main/resources/application.properties:12
+[HIGH] [L2-JPAConverter] [main] FIELD_LEVEL_ENCRYPTION_DETECTED @ src/main/java/demo/Customer.java:5
+[HIGH] [L3-SpringSecurityBean] [main] CLASSICALLY_BROKEN_ALGORITHM_STRING @ src/main/java/demo/Shiro.java:5
+[HIGH] [L4-RawJCA] [main] CLASSICALLY_BROKEN_JCA_ALGORITHM @ src/main/java/demo/Modern.java:8
+[INFO] [L3-SpringSecurityBean] [main] JWT_DECODER_SIGNATURE_ALGORITHM @ src/main/java/demo/JwtConfig.java:11
+[INFO] [L4-RawJCA] [main] JWT_HMAC_ALGORITHM_DETECTED @ src/main/java/demo/TokenUtil.java:8
+[MEDIUM] [L1-ConfigFile] [main] DEPRECATED_KEYSTORE_TYPE @ src/main/resources/application.properties:10

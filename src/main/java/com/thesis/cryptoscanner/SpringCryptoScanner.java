@@ -1,35 +1,75 @@
 package com.thesis.cryptoscanner;
 
-import com.github.javaparser.StaticJavaParser;
+import com.github.javaparser.JavaParser;
+import com.github.javaparser.ParseResult;
+import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.body.FieldDeclaration;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.AnnotationExpr;
+import com.github.javaparser.ast.expr.ClassExpr;
+import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.FieldAccessExpr;
 import com.github.javaparser.ast.expr.IntegerLiteralExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
+import com.github.javaparser.ast.expr.NormalAnnotationExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
+import com.github.javaparser.ast.expr.SingleMemberAnnotationExpr;
 import com.github.javaparser.ast.expr.StringLiteralExpr;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * SpringCryptoScanner v2.0
+ * SpringCryptoScanner v2.1
  *
+ * v2.1 corrections (October 2026) — see CHANGELOG.md for evidence per item:
+ *   1. Parser now accepts modern Java (records, text blocks, sealed types). v2.0 silently
+ *      skipped every file it could not parse (60 files across the evaluation corpus).
+ *   2. Test code excluded consistently (src/test, src/integTest, *Test/*Tests/*IT/*ITest.java).
+ *      Every finding is tagged with its code context: main | sample | docs.
+ *   3. L3 MISSING_JWT_ALGORITHM_WHITELIST removed — false positive. Spring Security's
+ *      NimbusJwtDecoder.withPublicKey()/withSecretKey() builders pin a single algorithm via
+ *      SingleKeyJWSKeySelector and have no setJwsAlgorithms(). Replaced by the inventory rule
+ *      JWT_DECODER_SIGNATURE_ALGORITHM, which records the algorithm actually configured.
+ *   4. L1 config secrets: real .properties/.yml parsing (v2.0 split on ':' and measured the
+ *      text after the ':' inside ${ENV:default}). Placeholders are skipped; only crypto-key
+ *      settings (jwt/signing/hmac/encryption keys) are checked; comments are ignored.
+ *   5. New L4 rule HARDCODED_CRYPTO_KEY: string literals that flow into a signing or
+ *      encryption key sink (signWith, hmacShaKeyFor, SecretKeySpec, ...).
+ *   6. JWT algorithm enums attributed to the right library (JJWT vs Spring Security JOSE vs
+ *      Nimbus). Spring Security JOSE settings are framework-layer (L3).
+ *   7. L2 @Convert: the converter class is resolved and reported only if it uses crypto.
+ *   8. L3 extended to Spring Security password encoders and Encryptors.
+ *   9. Algorithm strings configured inside a Spring @Bean method are reported at L3.
+ *  10. Config and build files scanned in every module, not only the repository root.
+ *  11. "cbomkit-expected" now means: produced by a JCA call CBOMkit's rules cover. Whether
+ *      CBOMkit actually reports it is measured separately (see scripts/compare.py).
+ *
+ * Original v2.0 description:
  * Design goal: find everything CBOMkit finds (Layer 4 raw JCA)
  * PLUS everything CBOMkit misses (Layers 1-3 Spring abstractions).
  *
@@ -107,6 +147,7 @@ public class SpringCryptoScanner {
         QUANTUM_STATUS.put("SHA-1",     "classicallyBroken");
         QUANTUM_STATUS.put("SHA1",      "classicallyBroken");
         QUANTUM_STATUS.put("MD5",       "classicallyBroken");
+        QUANTUM_STATUS.put("MD4",       "classicallyBroken");
         QUANTUM_STATUS.put("MD2",       "classicallyBroken");
         QUANTUM_STATUS.put("DES",       "classicallyBroken");
         QUANTUM_STATUS.put("3DES",      "classicallyBroken");
@@ -134,6 +175,8 @@ public class SpringCryptoScanner {
 
         PRIMITIVE_TYPE.put("SHA-1",    "hash");
         PRIMITIVE_TYPE.put("MD5",      "hash");
+        PRIMITIVE_TYPE.put("MD4",      "hash");
+        PRIMITIVE_TYPE.put("SHA-1",    "hash");
         PRIMITIVE_TYPE.put("DES",      "blockCipher");
         PRIMITIVE_TYPE.put("3DES",     "blockCipher");
         PRIMITIVE_TYPE.put("DESEDE",   "blockCipher");
@@ -185,6 +228,10 @@ public class SpringCryptoScanner {
         public String quantumStatus;
         public String primitive;
         public String replacement;
+        /** main | sample | docs — where in the repository the finding sits. */
+        public String context = "main";
+        /** true when the finding comes from a JCA call that CBOMkit's rules are designed to detect. */
+        public boolean cbomkitExpected = false;
 
         Finding(String rule, String file, int line, String detail,
                 String layer, String severity, String algorithm) {
@@ -229,8 +276,8 @@ public class SpringCryptoScanner {
 
         @Override
         public String toString() {
-            return String.format("[%s] [%s] %s @ %s:%d — %s [quantum: %s]",
-                severity, layer, rule, file, line, detail, quantumStatus);
+            return String.format("[%s] [%s] [%s] %s @ %s:%d — %s [quantum: %s]",
+                severity, layer, context, rule, file, line, detail, quantumStatus);
         }
     }
 
@@ -254,34 +301,90 @@ public class SpringCryptoScanner {
         this.projectName = new File(projectPath).getName();
     }
 
+    // ── Scan scope ─────────────────────────────────────────────────────────────
+    /** Test code is out of scope (same as CBOMkit's default exclusions, plus Gradle test sets). */
+    private static final Pattern TEST_PATH = Pattern.compile(
+        "(^|/)src/(test|integTest|integrationTest|testFixtures|it)/|(^|/)test/java/"
+        + "|(Test|Tests|IT|ITest|TestCase)\\.java$");
+    private static final Pattern DOCS_PATH   = Pattern.compile("(^|/)(docs?|documentation)/");
+    private static final Pattern SAMPLE_PATH = Pattern.compile("(^|/)(samples?|examples?|demos?)[^/]*/");
+
+    static boolean isTestPath(String rel)  { return TEST_PATH.matcher(rel.replace('\\','/')).find(); }
+    static String contextOf(String rel) {
+        String r = rel.replace('\\', '/');
+        int src = r.indexOf("src/");               // judge by module folders only, not Java packages
+        if (src >= 0) r = r.substring(0, src);
+        if (DOCS_PATH.matcher(r).find())   return "docs";
+        if (SAMPLE_PATH.matcher(r).find()) return "sample";
+        return "main";
+    }
+
+    private final JavaParser parser = new JavaParser(
+        new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.BLEEDING_EDGE));
+    private final List<String> parseFailures = new ArrayList<>();
+    public  List<String> getParseFailures() { return parseFailures; }
+    private int javaFilesScanned = 0;
+    public  int getJavaFilesScanned() { return javaFilesScanned; }
+
+    /** simple class name -> parsed compilation unit, used to resolve @Convert converters. */
+    private final Map<String, CompilationUnit> classIndex = new HashMap<>();
+
+    private String rel(Path p) {
+        try { return Paths.get(projectPath).relativize(p).toString().replace('\\', '/'); }
+        catch (Exception e) { return p.getFileName().toString(); }
+    }
+
     // ── Entry point ────────────────────────────────────────────────────────────
     public void scan() throws Exception {
         System.out.println("==============================================");
-        System.out.println(" Spring Crypto Scanner v2.0");
-        System.out.println(" Goal: CBOMkit L4 coverage + Spring L1/L2/L3");
+        System.out.println(" Spring Crypto Scanner v2.1");
         System.out.println(" Scanning: " + projectPath);
         System.out.println("==============================================\n");
 
+        // Pass 1: parse every non-test Java file once
+        Map<String, CompilationUnit> units = new java.util.TreeMap<>();
+        List<Path> configFiles = new ArrayList<>();
+        List<Path> buildFiles  = new ArrayList<>();
         try (Stream<Path> paths = Files.walk(Paths.get(projectPath))) {
-            paths.filter(p -> p.toString().endsWith(".java"))
-                 .filter(p -> !p.getFileName().toString().equals("SpringCryptoScanner.java"))
-                 // Exclude test directories — CBOMkit scans production code only
-                 // Ensures scan scope matches CBOMkit for fair comparison
-                 .filter(p -> {
-                     String ps = p.toString().replace("\\", "/");
-                     return !ps.contains("/src/test/")
-                         && !ps.contains("/test/java/")
-                         && !ps.contains("/tests/");
-                 })
-                 .forEach(p -> {
-                     try { scanJavaFile(p.toFile()); }
-                     catch (Exception e) { System.err.println("Could not parse: " + p); }
-                 });
+            for (Path p : (Iterable<Path>) paths::iterator) {
+                String r = rel(p);
+                if (r.startsWith(".git/") || r.contains("/.git/") || r.contains("node_modules/")
+                    || r.contains("/build/") || r.startsWith("build/") || r.contains("/target/") || r.startsWith("target/")) continue;
+                if (!Files.isRegularFile(p) || isTestPath(r)) continue;
+                String fn = p.getFileName().toString();
+                if (fn.endsWith(".java")) {
+                    if (fn.equals("SpringCryptoScanner.java")) continue;
+                    ParseResult<CompilationUnit> res;
+                    try { res = parser.parse(p); }
+                    catch (Exception e) { parseFailures.add(r); continue; }
+                    if (!res.isSuccessful() || res.getResult().isEmpty()) { parseFailures.add(r); continue; }
+                    CompilationUnit cu = res.getResult().get();
+                    units.put(r, cu);
+                    cu.getPrimaryTypeName().ifPresent(n -> classIndex.putIfAbsent(n, cu));
+                    cu.getTypes().forEach(t -> classIndex.putIfAbsent(t.getNameAsString(), cu));
+                } else if (fn.matches("(application|bootstrap)[-\\w]*\\.(ya?ml|properties)")
+                           && r.contains("resources/")) {
+                    configFiles.add(p);
+                } else if (fn.equals("pom.xml") || fn.endsWith(".gradle") || fn.endsWith(".gradle.kts")) {
+                    buildFiles.add(p);
+                }
+            }
         }
 
-        scanYamlFile(projectPath + "/src/main/resources/application.yml");
-        scanYamlFile(projectPath + "/src/main/resources/application.properties");
-        scanPomFile(projectPath + "/pom.xml");
+        // Pass 2: rules
+        for (Map.Entry<String, CompilationUnit> e : units.entrySet()) {
+            javaFilesScanned++;
+            scanJavaFile(e.getValue(), e.getKey());
+        }
+        for (Path c : configFiles) scanConfigFile(c);
+        for (Path b : buildFiles)  scanBuildFile(b);
+
+        for (Finding f : findings) f.context = contextOf(f.file);
+
+        if (!parseFailures.isEmpty()) {
+            System.out.println(" WARNING: " + parseFailures.size() + " Java file(s) could not be parsed and were NOT scanned:");
+            parseFailures.forEach(pf -> System.out.println("   - " + pf));
+        }
         printReport();
 
         String cbomPath = projectPath + "/cbom-springscanner.json";
@@ -289,28 +392,37 @@ public class SpringCryptoScanner {
         System.out.println("\n CBOM JSON written to: " + cbomPath);
     }
 
-    private void scanJavaFile(File file) throws Exception {
-        CompilationUnit cu   = StaticJavaParser.parse(new FileInputStream(file));
-        // Use relative path from project root so full package path is visible
-        // e.g. "src/main/java/com/example/security/SecurityConfiguration.java"
-        // instead of just "SecurityConfiguration.java"
-        String name;
-        try {
-            name = Paths.get(projectPath).relativize(file.toPath()).toString();
-        } catch (Exception e) {
-            name = file.getName();
-        }
+    private void scanJavaFile(CompilationUnit cu, String name) {
         // Layer 3
         checkBCrypt(cu, name);
+        checkSpringPasswordEncoders(cu, name);
         checkJwtDecoder(cu, name);
         // Layer 2
         checkConvertAnnotation(cu, name);
-        // Layer 4 — three sub-rules together matching CBOMkit + extending it
+        // Layer 4 — JCA calls (what CBOMkit's rules cover) + extensions
         checkJcaGetInstance(cu, name);
-        checkSecretKeySpec(cu, name);    // NEW: new SecretKeySpec(bytes, "AES")
+        checkSecretKeySpec(cu, name);
         checkWeakAlgorithmStrings(cu, name);
         checkJwtLibraryEnums(cu, name);
+        checkHardcodedCryptoKeys(cu, name);
     }
+
+    // ── AST helpers ────────────────────────────────────────────────────────────
+    private static int lineOf(Node n) { return n.getBegin().map(p -> p.line).orElse(0); }
+
+    /** True when the node sits inside a method annotated with Spring's @Bean. */
+    private static boolean insideBeanMethod(Node n) {
+        Optional<MethodDeclaration> m = n.findAncestor(MethodDeclaration.class);
+        return m.isPresent() && m.get().getAnnotations().stream()
+            .anyMatch(a -> a.getNameAsString().equals("Bean"));
+    }
+
+    private static boolean importsPackage(CompilationUnit cu, String prefix) {
+        return cu.getImports().stream().anyMatch(i -> i.getNameAsString().startsWith(prefix));
+    }
+
+    /** Adds a finding produced by a JCA call that CBOMkit's rules are designed to report. */
+    private void addJca(Finding f) { f.cbomkitExpected = true; findings.add(f); }
 
     // ═══════════════════════════════════════════════════════════
     // LAYER 3 — Spring Security @Bean (CBOMkit misses these)
@@ -336,20 +448,172 @@ public class SpringCryptoScanner {
         });
     }
 
+    /**
+     * Severity given to quantum-vulnerable public-key algorithms (RSA, EC, DSA, DH).
+     * v2.0 policy kept unchanged; change here to apply a different policy everywhere.
+     */
+    static final String SEV_QUANTUM_VULNERABLE = "CRITICAL";
+
+    private static final Pattern JWS_NAME = Pattern.compile("\\b(RS|PS|ES|HS)(256|384|512)\\b");
+
+    /** Maps a JOSE algorithm name (RS256, ES384, HS512 ...) to this scanner's algorithm keys. */
+    private static String joseToAlgorithm(String jws) {
+        if (jws.startsWith("RS") || jws.startsWith("PS")) return "RSA";
+        if (jws.startsWith("ES")) return "ECDSA";
+        return "HMACSHA" + jws.substring(2);
+    }
+
+    /** Resolves an algorithm argument such as SignatureAlgorithm.RS512 or a constant holding it. */
+    private static Optional<String> resolveJws(Expression arg, CompilationUnit cu) {
+        Matcher m = JWS_NAME.matcher(arg.toString());
+        if (m.find()) return Optional.of(m.group());
+        if (arg.isNameExpr()) {
+            String n = arg.asNameExpr().getNameAsString();
+            for (VariableDeclarator v : cu.findAll(VariableDeclarator.class)) {
+                if (v.getNameAsString().equals(n) && v.getInitializer().isPresent()) {
+                    Matcher mi = JWS_NAME.matcher(v.getInitializer().get().toString());
+                    if (mi.find()) return Optional.of(mi.group());
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * L3 — JWT signature verification configured through Spring Security's NimbusJwtDecoder builders.
+     *
+     * Replaces v2.0's MISSING_JWT_ALGORITHM_WHITELIST, which was a false positive:
+     * withPublicKey()/withSecretKey() build a SingleKeyJWSKeySelector that accepts exactly one
+     * algorithm (RS256 / HS256 unless signatureAlgorithm()/macAlgorithm() is called), so
+     * algorithm confusion is not possible, and setJwsAlgorithms() does not exist on these builders.
+     * What IS useful for a CBOM is the algorithm itself, which CBOMkit cannot see (no JCA call).
+     */
     private void checkJwtDecoder(CompilationUnit cu, String fileName) {
         cu.findAll(MethodCallExpr.class).forEach(expr -> {
             String name = expr.getNameAsString();
-            if (!name.equals("withSecretKey") && !name.equals("withPublicKey")) return;
-            String full = expr.toString();
-            if (!full.contains("setJwsAlgorithms") && !full.contains("jwsAlgorithm")) {
-                findings.add(new Finding(
-                    "MISSING_JWT_ALGORITHM_WHITELIST", fileName,
-                    expr.getBegin().map(p -> p.line).orElse(0),
-                    "NimbusJwtDecoder." + name + "() without setJwsAlgorithms(). " +
-                    "Vulnerable to JWT algorithm confusion attack (attacker switches RS256 to HS256). " +
-                    "CBOMkit misses this (Spring Security builder, not JCA getInstance).",
-                    "L3-SpringSecurityBean", "CRITICAL", "RSA"
-                ));
+            if (!name.equals("withSecretKey") && !name.equals("withPublicKey") && !name.equals("withJwkSetUri")) return;
+            String scope = expr.getScope().map(Object::toString).orElse("");
+            if (!scope.endsWith("NimbusJwtDecoder") && !scope.endsWith("NimbusReactiveJwtDecoder")) return;
+
+            // Walk up the fluent chain: withPublicKey(k).signatureAlgorithm(X).build()
+            String jws = null;
+            boolean explicitUnresolved = false;
+            Node cur = expr;
+            while (cur.getParentNode().isPresent() && cur.getParentNode().get() instanceof MethodCallExpr) {
+                MethodCallExpr parent = (MethodCallExpr) cur.getParentNode().get();
+                if (parent.getScope().isEmpty() || parent.getScope().get() != cur) break;
+                String pn = parent.getNameAsString();
+                if ((pn.equals("signatureAlgorithm") || pn.equals("macAlgorithm") || pn.equals("jwsAlgorithm"))
+                    && !parent.getArguments().isEmpty()) {
+                    Optional<String> r = resolveJws(parent.getArgument(0), cu);
+                    if (r.isPresent()) jws = r.get(); else explicitUnresolved = true;
+                }
+                cur = parent;
+            }
+            if (jws == null && explicitUnresolved) {
+                findings.add(new Finding("JWT_DECODER_SIGNATURE_ALGORITHM", fileName, lineOf(expr),
+                    "Spring Security " + scope + "." + name + "() — JWT verification algorithm chosen at runtime ("
+                    + "not resolvable statically). Recorded for CBOM inventory. Not visible to CBOMkit.",
+                    "L3-SpringSecurityBean", "INFO", "JWS-runtime"));
+                return;
+            }
+            boolean isDefault = jws == null;
+            if (isDefault) jws = name.equals("withSecretKey") ? "HS256" : "RS256";
+
+            String algo = joseToAlgorithm(jws);
+            boolean pq  = !algo.startsWith("HMAC");
+            String detail = "Spring Security " + scope + "." + name + "() verifies JWT signatures with " + jws
+                + (isDefault ? " (builder default)" : "") + ". The builder accepts only this one algorithm. "
+                + (pq ? BREAK_REASON.getOrDefault(algo, "Quantum-vulnerable") + ". Plan migration to ML-DSA (NIST FIPS 204). "
+                      : "HMAC is quantum-safe; verify the key is at least 256 bits. ")
+                + "Not visible to CBOMkit (configured through the framework, no JCA call in application code).";
+            findings.add(new Finding("JWT_DECODER_SIGNATURE_ALGORITHM", fileName, lineOf(expr), detail,
+                "L3-SpringSecurityBean", pq ? SEV_QUANTUM_VULNERABLE : "INFO", algo));
+        });
+    }
+
+    /**
+     * L3 — Spring Security crypto module: password encoders and Encryptors.
+     * These are constructed as framework objects (usually in a @Bean), never via JCA getInstance.
+     */
+    private void checkSpringPasswordEncoders(CompilationUnit cu, String fileName) {
+        final String L3 = "L3-SpringSecurityBean";
+        final String note = " Not visible to CBOMkit (Spring Security object, not a JCA call).";
+        cu.findAll(ObjectCreationExpr.class).forEach(expr -> {
+            String t = expr.getType().getNameAsString();
+            int line = lineOf(expr);
+            switch (t) {
+                case "BCryptPasswordEncoder":
+                    boolean weak = !expr.getArguments().isEmpty() && expr.getArgument(0).isIntegerLiteralExpr()
+                        && Integer.parseInt(expr.getArgument(0).asIntegerLiteralExpr().getValue()) < 10;
+                    if (!weak) findings.add(new Finding("PASSWORD_HASHING_ALGORITHM", fileName, line,
+                        "BCryptPasswordEncoder — password hashing with bcrypt (cost >= 10)." + note, L3, "INFO", "BCrypt"));
+                    break; // weak cost handled by checkBCrypt
+                case "Pbkdf2PasswordEncoder":
+                case "SCryptPasswordEncoder":
+                case "Argon2PasswordEncoder": {
+                    String a = t.replace("PasswordEncoder", "").toUpperCase();
+                    findings.add(new Finding("PASSWORD_HASHING_ALGORITHM", fileName, line,
+                        t + " — password hashing with " + a + "." + note, L3, "INFO", a));
+                    break;
+                }
+                case "MessageDigestPasswordEncoder": {
+                    String a = expr.getArguments().isEmpty() || !expr.getArgument(0).isStringLiteralExpr()
+                        ? "unknown" : expr.getArgument(0).asStringLiteralExpr().asString().toUpperCase();
+                    findings.add(new Finding("DEPRECATED_PASSWORD_ENCODER", fileName, line,
+                        "MessageDigestPasswordEncoder(" + a + ") — single fast digest for passwords; deprecated by "
+                        + "Spring Security. Use bcrypt/Argon2 via DelegatingPasswordEncoder." + note, L3, "HIGH", a));
+                    break;
+                }
+                case "StandardPasswordEncoder":
+                    findings.add(new Finding("DEPRECATED_PASSWORD_ENCODER", fileName, line,
+                        "StandardPasswordEncoder — SHA-256 with 1024 iterations; deprecated by Spring Security." + note,
+                        L3, "HIGH", "SHA-256"));
+                    break;
+                case "LdapShaPasswordEncoder":
+                    findings.add(new Finding("DEPRECATED_PASSWORD_ENCODER", fileName, line,
+                        "LdapShaPasswordEncoder — salted SHA-1; deprecated by Spring Security." + note, L3, "HIGH", "SHA-1"));
+                    break;
+                case "Md4PasswordEncoder":
+                    findings.add(new Finding("DEPRECATED_PASSWORD_ENCODER", fileName, line,
+                        "Md4PasswordEncoder — MD4; deprecated by Spring Security." + note, L3, "HIGH", "MD4"));
+                    break;
+                default:
+            }
+        });
+        cu.findAll(MethodCallExpr.class).forEach(expr -> {
+            String scope = expr.getScope().map(Object::toString).orElse("");
+            String n = expr.getNameAsString();
+            int line = lineOf(expr);
+            if (scope.endsWith("NoOpPasswordEncoder") && n.equals("getInstance")) {
+                findings.add(new Finding("PLAINTEXT_PASSWORD_STORAGE", fileName, line,
+                    "NoOpPasswordEncoder — passwords stored in plain text." + note, L3, "CRITICAL", "NONE"));
+            } else if (scope.endsWith("PasswordEncoderFactories") && n.equals("createDelegatingPasswordEncoder")) {
+                findings.add(new Finding("PASSWORD_HASHING_ALGORITHM", fileName, line,
+                    "DelegatingPasswordEncoder — bcrypt by default, algorithm id stored per hash." + note, L3, "INFO", "BCrypt"));
+            } else if ((scope.endsWith("Pbkdf2PasswordEncoder") || scope.endsWith("SCryptPasswordEncoder")
+                        || scope.endsWith("Argon2PasswordEncoder")) && n.startsWith("defaultsForSpringSecurity")) {
+                String a = scope.substring(scope.lastIndexOf('.') + 1).replace("PasswordEncoder", "").toUpperCase();
+                findings.add(new Finding("PASSWORD_HASHING_ALGORITHM", fileName, line,
+                    scope + "." + n + "() — password hashing with " + a + "." + note, L3, "INFO", a));
+            } else if (scope.endsWith("Encryptors")) {
+                switch (n) {
+                    case "stronger": case "delux":
+                        findings.add(new Finding("SPRING_ENCRYPTOR", fileName, line,
+                            "Encryptors." + n + "() — AES-256-GCM, PBKDF2-derived key." + note, L3, "INFO", "AES")); break;
+                    case "standard": case "text":
+                        findings.add(new Finding("SPRING_ENCRYPTOR", fileName, line,
+                            "Encryptors." + n + "() — AES-256-CBC without authentication; Spring recommends stronger()/delux()." + note,
+                            L3, "MEDIUM", "AES")); break;
+                    case "queryableText":
+                        findings.add(new Finding("SPRING_ENCRYPTOR", fileName, line,
+                            "Encryptors.queryableText() — deterministic AES-CBC with a shared IV; equal plaintexts give equal ciphertexts." + note,
+                            L3, "HIGH", "AES")); break;
+                    case "noOpText":
+                        findings.add(new Finding("SPRING_ENCRYPTOR", fileName, line,
+                            "Encryptors.noOpText() — no encryption at all." + note, L3, "CRITICAL", "NONE")); break;
+                    default:
+                }
             }
         });
     }
@@ -358,20 +622,62 @@ public class SpringCryptoScanner {
     // LAYER 2 — Spring Data @Convert (CBOMkit misses these)
     // ═══════════════════════════════════════════════════════════
 
+    private static final Pattern CRYPTO_IN_CONVERTER = Pattern.compile(
+        "\\b(Cipher|SecretKeySpec|Mac|TextEncryptor|BytesEncryptor|Encryptors|StandardPBEStringEncryptor"
+        + "|AesBytesEncryptor|KeyGenerator)\\b|\\b(encrypt|decrypt)\\w*\\s*\\(");
+
+    /** Extracts the converter class from @Convert(converter = X.class) or @Convert(X.class). */
+    private static Optional<String> converterClass(AnnotationExpr ann) {
+        Expression v = null;
+        if (ann instanceof SingleMemberAnnotationExpr) v = ((SingleMemberAnnotationExpr) ann).getMemberValue();
+        if (ann instanceof NormalAnnotationExpr) {
+            v = ((NormalAnnotationExpr) ann).getPairs().stream()
+                .filter(p -> p.getNameAsString().equals("converter")).map(p -> p.getValue()).findFirst().orElse(null);
+        }
+        if (v instanceof ClassExpr) {
+            String t = ((ClassExpr) v).getType().asString();
+            return Optional.of(t.substring(t.lastIndexOf('.') + 1));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * L2 — JPA @Convert on an entity field whose converter performs cryptography.
+     * v2.0 flagged every @Convert (including enum/date/JSON converters). v2.1 resolves the
+     * converter class in the project and reports only when it uses crypto; the algorithm is
+     * taken from the converter's Cipher.getInstance(...) when present.
+     */
     private void checkConvertAnnotation(CompilationUnit cu, String fileName) {
         cu.findAll(FieldDeclaration.class).forEach(field -> {
             field.getAnnotations().forEach(ann -> {
                 if (!ann.getNameAsString().equals("Convert")) return;
                 String fieldName = field.getVariables().isNonEmpty()
                     ? field.getVariables().get(0).getNameAsString() : "unknown";
+                Optional<String> conv = converterClass(ann);
+                CompilationUnit convCu = conv.map(classIndex::get).orElse(null);
+                if (convCu == null) return;                     // converter not in this project: cannot judge
+                String src = convCu.toString();
+                if (!CRYPTO_IN_CONVERTER.matcher(src).find()) return;  // not a crypto converter
+
+                String algo = "unknown";
+                String severity = "MEDIUM";
+                for (MethodCallExpr mc : convCu.findAll(MethodCallExpr.class)) {
+                    if (mc.getNameAsString().equals("getInstance") && mc.getScope().map(Object::toString).orElse("").matches("(javax\\.crypto\\.)?Cipher")
+                        && !mc.getArguments().isEmpty() && mc.getArgument(0).isStringLiteralExpr()) {
+                        String a = mc.getArgument(0).asStringLiteralExpr().asString().toUpperCase();
+                        algo = a.contains("/ECB/") || (a.equals("AES")) ? "AES-ECB" : a.split("/")[0];
+                        if (algo.equals("AES-ECB")) severity = "HIGH";
+                        break;
+                    }
+                }
                 findings.add(new Finding(
-                    "FIELD_LEVEL_ENCRYPTION_DETECTED", fileName,
-                    field.getBegin().map(p -> p.line).orElse(0),
-                    "@Convert on field '" + fieldName + "' — JPA field-level encryption. " +
-                    "Audit converter: verify AES-256-GCM (not ECB), no hardcoded key. " +
-                    "CBOMkit misses this (annotation, not JCA instanceof call).",
-                    "L2-JPAConverter", "MEDIUM", "unknown"
-                ));
+                    "FIELD_LEVEL_ENCRYPTION_DETECTED", fileName, lineOf(field),
+                    "@Convert(" + conv.get() + ") on field '" + fieldName + "' — JPA field-level encryption"
+                    + (algo.equals("unknown") ? "" : " using " + algo + (algo.equals("AES-ECB")
+                        ? " (Cipher \"AES\" defaults to ECB)" : "")) + ". "
+                    + "The entity field is the asset; the cipher call alone does not say which data it protects. "
+                    + "Not visible to CBOMkit as a data-level asset (annotation).",
+                    "L2-JPAConverter", severity, algo));
             });
         });
     }
@@ -391,9 +697,11 @@ public class SpringCryptoScanner {
             if (!expr.getNameAsString().equals("getInstance")) return;
 
             // Scope must be a known JCA service class
-            String scope = expr.getScope()
+            // accept both MessageDigest.getInstance(..) and java.security.MessageDigest.getInstance(..)
+            String scopeFull = expr.getScope()
                 .map(s -> s instanceof NameExpr ? ((NameExpr)s).getNameAsString() : s.toString())
                 .orElse("");
+            String scope = scopeFull.substring(scopeFull.lastIndexOf('.') + 1);
             if (!JCA_SERVICES.contains(scope)) return;
             if (expr.getArguments().isEmpty()) return;
 
@@ -402,11 +710,12 @@ public class SpringCryptoScanner {
                 String algoU = algo.toUpperCase();
                 int    line  = expr.getBegin().map(p -> p.line).orElse(0);
 
-                // ECB mode
-                if (algoU.contains("/ECB/") || algoU.equals("ECB")) {
-                    findings.add(new Finding(
+                // ECB mode — explicit, or implicit: Cipher.getInstance("AES") defaults to AES/ECB/PKCS5Padding
+                final boolean implicitEcb = scope.equals("Cipher") && (algoU.equals("AES") || algoU.equals("DESEDE") || algoU.equals("DES"));
+                if (algoU.contains("/ECB/") || algoU.equals("ECB") || implicitEcb) {
+                    addJca(new Finding(
                         "INSECURE_CIPHER_MODE_ECB", fileName, line,
-                        scope + ".getInstance(\"" + algo + "\") — ECB mode is insecure. " +
+                        scope + ".getInstance(\"" + algo + "\") — ECB mode" + (implicitEcb ? " (provider default when no mode is given)" : "") + " is insecure. " +
                         "Identical plaintext => identical ciphertext. Replace with AES/GCM/NoPadding. " +
                         "CBOMkit detects this (raw JCA call).",
                         "L4-RawJCA", "CRITICAL", "AES-ECB"
@@ -427,7 +736,7 @@ public class SpringCryptoScanner {
                 String cbomkitNote = "CBOMkit detects this (raw JCA call).";
 
                 if (status == null) {
-                    findings.add(new Finding(
+                    addJca(new Finding(
                         "CRYPTOGRAPHIC_ASSET_DETECTED", fileName, line,
                         scope + ".getInstance(\"" + algo + "\") — unclassified crypto asset. " + cbomkitNote,
                         "L4-RawJCA", "INFO", algo
@@ -441,21 +750,21 @@ public class SpringCryptoScanner {
 
                 switch (status) {
                     case "notQuantumSafe":
-                        findings.add(new Finding("QUANTUM_VULNERABLE_JCA_ALGORITHM",
-                            fileName, line, detail, "L4-RawJCA", "CRITICAL", matched));
+                        addJca(new Finding("QUANTUM_VULNERABLE_JCA_ALGORITHM",
+                            fileName, line, detail, "L4-RawJCA", SEV_QUANTUM_VULNERABLE, matched));
                         break;
                     case "classicallyBroken":
-                        findings.add(new Finding("CLASSICALLY_BROKEN_JCA_ALGORITHM",
+                        addJca(new Finding("CLASSICALLY_BROKEN_JCA_ALGORITHM",
                             fileName, line, detail, "L4-RawJCA", "HIGH", matched));
                         break;
                     case "quantumSafe":
                         if ("AES".equals(matched) && algoU.contains("128")) {
-                            findings.add(new Finding("WEAK_AES_KEY_SIZE", fileName, line,
+                            addJca(new Finding("WEAK_AES_KEY_SIZE", fileName, line,
                                 scope + ".getInstance(\"" + algo + "\") — AES-128. " +
                                 "Grover's reduces post-quantum security to 64 bits. Upgrade to AES-256. " + cbomkitNote,
                                 "L4-RawJCA", "MEDIUM", "AES-128"));
                         } else {
-                            findings.add(new Finding("CRYPTOGRAPHIC_ASSET_INVENTORY", fileName, line,
+                            addJca(new Finding("CRYPTOGRAPHIC_ASSET_INVENTORY", fileName, line,
                                 scope + ".getInstance(\"" + algo + "\") — " + matched +
                                 " is quantum-safe. Recorded for CBOM inventory. " + cbomkitNote,
                                 "L4-RawJCA", "INFO", matched));
@@ -477,7 +786,7 @@ public class SpringCryptoScanner {
 
             if (typeName.equals("DESedeKeySpec") || typeName.equals("DESKeySpec")) {
                 String algo = typeName.equals("DESedeKeySpec") ? "3DES" : "DES";
-                findings.add(new Finding("CLASSICALLY_BROKEN_JCA_ALGORITHM", fileName, line,
+                addJca(new Finding("CLASSICALLY_BROKEN_JCA_ALGORITHM", fileName, line,
                     "new " + typeName + "() — " + algo + " key. " +
                     BREAK_REASON.getOrDefault(algo, "Broken") + ". Replace: AES-256-GCM. " +
                     "CBOMkit detects this.",
@@ -488,7 +797,8 @@ public class SpringCryptoScanner {
             if (!typeName.equals("SecretKeySpec")) return;
             if (expr.getArguments().size() < 2) return;
 
-            expr.getArguments().get(1).ifStringLiteralExpr(algoLit -> {
+            // algorithm is the last argument: SecretKeySpec(key, alg) or SecretKeySpec(key, off, len, alg)
+            expr.getArguments().get(expr.getArguments().size() - 1).ifStringLiteralExpr(algoLit -> {
                 String algo  = algoLit.asString().trim();
                 String algoU = algo.toUpperCase();
                 String status = null; String matched = null;
@@ -507,13 +817,13 @@ public class SpringCryptoScanner {
 
                 switch (status) {
                     case "notQuantumSafe":
-                        findings.add(new Finding("QUANTUM_VULNERABLE_JCA_ALGORITHM",
-                            fileName, line, detail, "L4-RawJCA", "CRITICAL", matched)); break;
+                        addJca(new Finding("QUANTUM_VULNERABLE_JCA_ALGORITHM",
+                            fileName, line, detail, "L4-RawJCA", SEV_QUANTUM_VULNERABLE, matched)); break;
                     case "classicallyBroken":
-                        findings.add(new Finding("CLASSICALLY_BROKEN_JCA_ALGORITHM",
+                        addJca(new Finding("CLASSICALLY_BROKEN_JCA_ALGORITHM",
                             fileName, line, detail, "L4-RawJCA", "HIGH", matched)); break;
                     case "quantumSafe":
-                        findings.add(new Finding("CRYPTOGRAPHIC_ASSET_INVENTORY", fileName, line,
+                        addJca(new Finding("CRYPTOGRAPHIC_ASSET_INVENTORY", fileName, line,
                             "new SecretKeySpec(key, \"" + algo + "\") — quantum-safe. " +
                             "CBOMkit detects this.", "L4-RawJCA", "INFO", matched)); break;
                 }
@@ -533,17 +843,25 @@ public class SpringCryptoScanner {
             int    line = str.getBegin().map(p -> p.line).orElse(0);
             if (val.length() < 2 || val.length() > 40) return;
 
-            // Skip if parent is already a getInstance() call — handled by Rule 4a
+            // Skip if parent is already a getInstance()/SecretKeySpec/encoder call — handled by other rules
             if (str.getParentNode().isPresent()) {
                 var parent = str.getParentNode().get();
                 if (parent instanceof MethodCallExpr &&
                     ((MethodCallExpr)parent).getNameAsString().equals("getInstance")) return;
+                if (parent instanceof ObjectCreationExpr) {
+                    String t = ((ObjectCreationExpr) parent).getType().getNameAsString();
+                    if (t.equals("SecretKeySpec") || t.equals("MessageDigestPasswordEncoder")) return;
+                }
             }
+            // v2.1: a literal configured inside a Spring @Bean method is framework configuration (L3),
+            // e.g. Shiro's HashedCredentialsMatcher.setHashAlgorithmName("md5") in a @Bean.
+            final String strLayer = insideBeanMethod(str) ? "L3-SpringSecurityBean" : "L4-RawJCA";
+            final String where = strLayer.startsWith("L3") ? " (set inside a Spring @Bean method)" : "";
 
             if (valU.contains("/ECB/") || valU.equals("ECB")) {
                 findings.add(new Finding("INSECURE_CIPHER_MODE_ECB", fileName, line,
-                    "Algorithm string \"" + val + "\" — ECB mode. Replace with AES/GCM/NoPadding.",
-                    "L4-RawJCA", "CRITICAL", "AES-ECB"));
+                    "Algorithm string \"" + val + "\"" + where + " — ECB mode. Replace with AES/GCM/NoPadding.",
+                    strLayer, "CRITICAL", "AES-ECB"));
                 return;
             }
 
@@ -556,16 +874,16 @@ public class SpringCryptoScanner {
                 if (!matches) continue;
                 if (status.equals("notQuantumSafe")) {
                     findings.add(new Finding("QUANTUM_VULNERABLE_ALGORITHM_STRING", fileName, line,
-                        "Algorithm string \"" + val + "\" — quantum-vulnerable. " +
+                        "Algorithm string \"" + val + "\"" + where + " — quantum-vulnerable. " +
                         BREAK_REASON.getOrDefault(algo, "Broken by Shor's") + ". " +
                         "Replace: " + PQ_REPLACEMENT.getOrDefault(algo, "See NIST PQC"),
-                        "L4-RawJCA", "CRITICAL", algo));
+                        strLayer, SEV_QUANTUM_VULNERABLE, algo));
                 } else if (status.equals("classicallyBroken")) {
                     findings.add(new Finding("CLASSICALLY_BROKEN_ALGORITHM_STRING", fileName, line,
-                        "Algorithm string \"" + val + "\" — classically broken. " +
+                        "Algorithm string \"" + val + "\"" + where + " — classically broken. " +
                         BREAK_REASON.getOrDefault(algo, "Known broken") + ". " +
                         "Replace: " + PQ_REPLACEMENT.getOrDefault(algo, "SHA-256 or AES-256-GCM"),
-                        "L4-RawJCA", "HIGH", algo));
+                        strLayer, "HIGH", algo));
                 }
                 return;
             }
@@ -573,116 +891,254 @@ public class SpringCryptoScanner {
     }
 
     /**
-     * Rule 4c — JJWT SignatureAlgorithm enum references.
-     * CBOMkit detects these via JJWT-specific rules.
-     * e.g. SignatureAlgorithm.HS256, SignatureAlgorithm.RS256
-     * These are FieldAccessExpr — NOT StringLiteralExpr.
+     * Rule 4d — JWT algorithm enum references (JJWT, Spring Security JOSE, Nimbus JOSE).
+     * v2.0 labelled every SignatureAlgorithm.X as JJWT and claimed CBOMkit detects it; CBOMkit's
+     * Java support covers JCA and the BouncyCastle light-weight API only, so neither is true.
+     * v2.1 attributes the enum to its library from the imports. Spring Security JOSE settings are
+     * framework configuration and reported at L3.
      */
     private void checkJwtLibraryEnums(CompilationUnit cu, String fileName) {
+        boolean jjwt   = importsPackage(cu, "io.jsonwebtoken");
+        boolean spring = importsPackage(cu, "org.springframework.security.oauth2.jose")
+            || cu.getPackageDeclaration().map(pd -> pd.getNameAsString().startsWith("org.springframework.security.oauth2")).orElse(false);
+        boolean nimbus = importsPackage(cu, "com.nimbusds");
         cu.findAll(FieldAccessExpr.class).forEach(expr -> {
             String scope = expr.getScope().toString();
             String name  = expr.getNameAsString();
-            int    line  = expr.getBegin().map(p -> p.line).orElse(0);
-            if (!scope.equals("SignatureAlgorithm") &&
-                !scope.equals("io.jsonwebtoken.SignatureAlgorithm")) return;
+            String lib; String layer;
+            if ((scope.equals("SignatureAlgorithm") || scope.equals("io.jsonwebtoken.SignatureAlgorithm")) && jjwt
+                || scope.equals("Jwts.SIG")) { lib = "JJWT"; layer = "L4-RawJCA"; }
+            else if ((scope.equals("SignatureAlgorithm") || scope.equals("MacAlgorithm")) && spring && !jjwt) {
+                lib = "Spring Security JOSE"; layer = "L3-SpringSecurityBean"; }
+            else if (scope.equals("JWSAlgorithm") && nimbus) { lib = "Nimbus JOSE"; layer = "L4-RawJCA"; }
+            else return;
+            if (!JWS_NAME.matcher(name).matches()) return;
+            // already reported by the NimbusJwtDecoder rule
+            if (expr.getParentNode().filter(pn -> pn instanceof MethodCallExpr
+                    && List.of("signatureAlgorithm", "macAlgorithm", "jwsAlgorithm").contains(((MethodCallExpr) pn).getNameAsString())).isPresent()
+                && cu.toString().contains("NimbusJwtDecoder")) return;
 
-            String cbomkitNote = "CBOMkit detects this via JJWT-specific rules.";
-
-            if (name.startsWith("RS") || name.startsWith("PS")) {
-                findings.add(new Finding("QUANTUM_VULNERABLE_JWT_ALGORITHM", fileName, line,
-                    "JJWT SignatureAlgorithm." + name + " — RSA-based JWT. " +
-                    BREAK_REASON.getOrDefault("RSA", "Shor's breaks RSA") + ". " +
-                    "Replace: ML-DSA (NIST FIPS 204). " + cbomkitNote,
-                    "L4-RawJCA", "CRITICAL", "RSA"));
-            } else if (name.startsWith("ES")) {
-                findings.add(new Finding("QUANTUM_VULNERABLE_JWT_ALGORITHM", fileName, line,
-                    "JJWT SignatureAlgorithm." + name + " — ECDSA-based JWT. " +
-                    BREAK_REASON.getOrDefault("ECDSA", "Shor's breaks ECDSA") + ". " +
-                    "Replace: ML-DSA (NIST FIPS 204). " + cbomkitNote,
-                    "L4-RawJCA", "CRITICAL", "ECDSA"));
-            } else if (name.startsWith("HS")) {
-                String hmac = name.equals("HS256") ? "HMACSHA256" : name.equals("HS384") ? "HMACSHA384" : "HMACSHA512";
+            int    line  = lineOf(expr);
+            String algo  = joseToAlgorithm(name);
+            String note  = layer.startsWith("L3")
+                ? " Not visible to CBOMkit (framework setting, no JCA call)."
+                : " Not covered by CBOMkit (its Java rules cover JCA and BouncyCastle only).";
+            if (algo.startsWith("HMAC")) {
                 findings.add(new Finding("JWT_HMAC_ALGORITHM_DETECTED", fileName, line,
-                    "JJWT SignatureAlgorithm." + name + " — HMAC-SHA JWT. Quantum-safe. " +
-                    "Verify secret >= 256 bits. Recorded for CBOM inventory. " + cbomkitNote,
-                    "L4-RawJCA", "INFO", hmac));
+                    lib + " " + scope + "." + name + " — HMAC-SHA JWT. Quantum-safe; verify the key is at least 256 bits." + note,
+                    layer, "INFO", algo));
+            } else {
+                findings.add(new Finding("QUANTUM_VULNERABLE_JWT_ALGORITHM", fileName, line,
+                    lib + " " + scope + "." + name + " — " + (algo.equals("RSA") ? "RSA" : "ECDSA") + "-signed JWT. "
+                    + BREAK_REASON.getOrDefault(algo, "Shor's algorithm") + ". Replace: ML-DSA (NIST FIPS 204)." + note,
+                    layer, SEV_QUANTUM_VULNERABLE, algo));
             }
         });
+    }
+
+    // Methods / constructors that take a signing or encryption key
+    private static final Set<String> KEY_SINK_METHODS = Set.of(
+        "signWith", "setSigningKey", "verifyWith", "decryptWith", "encryptWith", "hmacShaKeyFor",
+        "withSecretKey", "HMAC256", "HMAC384", "HMAC512");
+    private static final Set<String> KEY_SINK_CTORS = Set.of("SecretKeySpec", "HmacKey", "MACSigner", "MACVerifier", "OctetSequenceKey");
+
+    /**
+     * Rule 4e (new in v2.1) — hard-coded cryptographic key: a string literal that reaches a key sink
+     * either directly or through a variable/constant initialised with a literal.
+     * Severity: CRITICAL when the key material is under 256 bits (32 bytes), HIGH otherwise.
+     */
+    private void checkHardcodedCryptoKeys(CompilationUnit cu, String fileName) {
+        Map<String, VariableDeclarator> literalVars = new HashMap<>();
+        for (VariableDeclarator v : cu.findAll(VariableDeclarator.class)) {
+            v.getInitializer().filter(Expression::isStringLiteralExpr).ifPresent(init -> {
+                String val = init.asStringLiteralExpr().asString();
+                if (!val.isBlank() && !val.contains("${")) literalVars.put(v.getNameAsString(), v);
+            });
+        }
+        Set<Node> reported = new HashSet<>();
+        List<Expression> sinks = new ArrayList<>();
+        for (MethodCallExpr mc : cu.findAll(MethodCallExpr.class))
+            if (KEY_SINK_METHODS.contains(mc.getNameAsString())) sinks.add(mc);
+        for (ObjectCreationExpr oc : cu.findAll(ObjectCreationExpr.class))
+            if (KEY_SINK_CTORS.contains(oc.getType().getNameAsString())) sinks.add(oc);
+
+        for (Expression sink : sinks) {
+            List<Expression> args = sink.isMethodCallExpr() ? sink.asMethodCallExpr().getArguments()
+                                                            : sink.asObjectCreationExpr().getArguments();
+            if (args.isEmpty()) continue;
+            // the key is the first argument for SecretKeySpec/hmacShaKeyFor/HMACxxx/withSecretKey,
+            // and any argument for signWith/setSigningKey (JJWT accepts (alg, key) and (key, alg))
+            String sinkName = sink.isMethodCallExpr() ? sink.asMethodCallExpr().getNameAsString()
+                                                      : sink.asObjectCreationExpr().getType().getNameAsString();
+            List<Expression> keyArgs = Set.of("signWith", "setSigningKey").contains(sinkName) ? args : List.of(args.get(0));
+            for (Expression a : keyArgs) {
+                String argText = a.toString();
+                boolean b64 = argText.contains("BASE64") || argText.toLowerCase().contains("base64");
+                List<StringLiteralExpr> lits = new ArrayList<>(a.findAll(StringLiteralExpr.class));
+                for (NameExpr ne : a.findAll(NameExpr.class)) {
+                    VariableDeclarator v = literalVars.get(ne.getNameAsString());
+                    if (v != null) lits.add(v.getInitializer().get().asStringLiteralExpr());
+                }
+                for (StringLiteralExpr lit : lits) {
+                    if (!reported.add(lit)) continue;
+                    String val = lit.asString();
+                    if (val.length() < 4 || val.matches("(?i)(HmacSHA\\d+|AES|DES|RSA|UTF-?8|HS\\d+)")) continue;
+                    int bytes = b64 ? (val.replace("=", "").length() * 3) / 4 : val.getBytes(StandardCharsets.UTF_8).length;
+                    Expression lastArg = args.get(args.size() - 1);
+                    String algo = sinkName.equals("SecretKeySpec") && args.size() > 1 && lastArg.isStringLiteralExpr()
+                        ? lastArg.asStringLiteralExpr().asString().toUpperCase() : "HMACSHA256";
+                    boolean weak = bytes < 32;
+                    findings.add(new Finding("HARDCODED_CRYPTO_KEY", fileName, lineOf(lit),
+                        "Hard-coded key material (" + bytes + " bytes" + (b64 ? ", Base64-decoded" : "") + ") passed to "
+                        + sinkName + "(). Anyone with the source can forge or decrypt. "
+                        + (weak ? "Also shorter than 256 bits. " : "")
+                        + "Load from a secrets manager or environment instead. Not reported by CBOMkit (it inventories algorithms, not key provenance).",
+                        "L4-RawJCA", weak ? "CRITICAL" : "HIGH", algo));
+                }
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════
     // LAYER 1 — Configuration Files (CBOMkit misses these)
     // ═══════════════════════════════════════════════════════════
 
-    private void scanYamlFile(String yamlPath) {
-        File f = new File(yamlPath);
-        if (!f.exists()) return;
-        try {
-            List<String> lines = Files.readAllLines(f.toPath());
+    /** Flattens a Spring .properties or .yml file into (dotted.key, value, line) entries. */
+    static List<String[]> flattenConfig(List<String> lines, boolean yaml) {
+        List<String[]> out = new ArrayList<>();
+        if (!yaml) {
             for (int i = 0; i < lines.size(); i++) {
-                String line  = lines.get(i).trim().toLowerCase();
-                int    lineN = i + 1;
-
-                if (line.contains("key-store-type") && line.contains("jks")) {
-                    findings.add(new Finding("DEPRECATED_KEYSTORE_TYPE", f.getName(), lineN,
-                        "JKS keystore deprecated since Java 9. Migrate to PKCS12. " +
-                        "CBOMkit misses this (YAML not parsed by CBOMkit).",
-                        "L1-ConfigFile", "MEDIUM", "JKS"));
-                }
-
-                if (line.contains("secret") && line.contains(":") && !line.startsWith("#")) {
-                    String[] parts = line.split(":", 2);
-                    if (parts.length > 1) {
-                        String val = parts[1].trim().replaceAll("[\"']", "");
-                        if (!val.isEmpty() && !val.startsWith("$") && !val.startsWith("@")
-                            && val.length() < 32) {
-                            findings.add(new Finding("WEAK_SECRET_IN_CONFIG", f.getName(), lineN,
-                                "Short secret (length=" + val.length() + ", min=32). " +
-                                "Must be >= 256 bits. Store in secrets manager, not config. " +
-                                "CBOMkit misses this (YAML not parsed by CBOMkit).",
-                                "L1-ConfigFile", "CRITICAL", "HMACSHA256"));
-                        }
-                    }
-                }
-
-                if (line.contains("protocol") && (line.contains(": tls") || line.contains("=tls"))
-                    && !line.contains("tlsv1.3") && !line.contains("tls1.3")) {
-                    findings.add(new Finding("TLS_VERSION_NOT_PINNED", f.getName(), lineN,
-                        "TLS not pinned to TLSv1.3. Set server.ssl.protocol=TLSv1.3. " +
-                        "CBOMkit misses this (YAML not parsed by CBOMkit).",
-                        "L1-ConfigFile", "MEDIUM", "TLS"));
-                }
+                String l = lines.get(i).strip();
+                if (l.isEmpty() || l.startsWith("#") || l.startsWith("!")) continue;
+                // java.util.Properties: key ends at the first unescaped '=', ':' or whitespace
+                int k = 0;
+                while (k < l.length() && "=: \t".indexOf(l.charAt(k)) < 0) { if (l.charAt(k) == '\\') k++; k++; }
+                String key = l.substring(0, Math.min(k, l.length())).strip();
+                String rest = k < l.length() ? l.substring(k).strip() : "";
+                if (rest.startsWith("=") || rest.startsWith(":")) rest = rest.substring(1).strip();
+                out.add(new String[]{key, rest, String.valueOf(i + 1)});
             }
-        } catch (Exception e) {
-            System.err.println("Could not read YAML: " + e.getMessage());
+            return out;
+        }
+        Deque<int[]> indents = new ArrayDeque<>();   // indentation levels
+        Deque<String> keys = new ArrayDeque<>();
+        for (int i = 0; i < lines.size(); i++) {
+            String raw = lines.get(i);
+            String t = raw.strip();
+            if (t.isEmpty() || t.startsWith("#") || t.equals("---") || t.startsWith("- ") || t.equals("-")) continue;
+            int ind = raw.length() - raw.stripLeading().length();
+            int c = t.indexOf(':');
+            if (c <= 0) continue;
+            String key = t.substring(0, c).strip().replaceAll("^[\"']|[\"']$", "");
+            String val = t.substring(c + 1).strip();
+            while (!indents.isEmpty() && indents.peek()[0] >= ind) { indents.pop(); keys.pop(); }
+            List<String> path = new ArrayList<>(keys); java.util.Collections.reverse(path); path.add(key);
+            String full = String.join(".", path);
+            if (val.isEmpty() || val.equals("|") || val.equals(">")) { indents.push(new int[]{ind}); keys.push(key); }
+            else out.add(new String[]{full, val, String.valueOf(i + 1)});
+        }
+        return out;
+    }
+
+    static String cleanValue(String v) {
+        String s = v.strip();
+        if (s.startsWith("\"") || s.startsWith("'")) {
+            char q = s.charAt(0); int e = s.indexOf(q, 1);
+            return e > 0 ? s.substring(1, e) : s.substring(1);
+        }
+        int hash = s.indexOf(" #");
+        return (hash >= 0 ? s.substring(0, hash) : s).strip();
+    }
+
+    // last key segment naming key material; whole key must also be about crypto/tokens
+    private static final Pattern SECRET_LEAF = Pattern.compile(
+        "(?i)(^|[-_.])(secret|secret[-_]?key|signing[-_]?key|private[-_]?key|hmac[-_]?key|encryption[-_]?key|jwt[-_]?secret|key)$");
+    private static final Pattern CRYPTO_CONTEXT = Pattern.compile("(?i)jwt|jws|jwe|token|sign|hmac|encrypt|crypt|cipher|aes");
+    private static final Pattern NOT_KEY_MATERIAL = Pattern.compile(
+        "(?i)(client[-_]?secret|key[-_]?store|key[-_]?alias|key[-_]?id|kid|public[-_]?key[-_]?location|uri|url|location|path|file|type|algorithm|expiration|header|prefix|name)");
+
+    /**
+     * L1 — Spring configuration files (application*.yml/.yaml/.properties, bootstrap*), every module.
+     * v2.0 bugs fixed: comment lines were matched (JKS), ${ENV:default} placeholders were split at
+     * the ':' and measured as 1-character secrets, and OAuth client secrets were treated as HMAC keys.
+     */
+    private void scanConfigFile(Path file) {
+        String name = rel(file);
+        boolean yaml = name.endsWith(".yml") || name.endsWith(".yaml");
+        List<String> lines;
+        try { lines = Files.readAllLines(file, StandardCharsets.UTF_8); }
+        catch (Exception e) {
+            try { lines = Files.readAllLines(file, StandardCharsets.ISO_8859_1); }
+            catch (Exception e2) { System.err.println("Could not read config: " + name); return; }
+        }
+        for (String[] kv : flattenConfig(lines, yaml)) {
+            String key = kv[0], keyL = key.toLowerCase();
+            String val = cleanValue(kv[1]);
+            int line = Integer.parseInt(kv[2]);
+            if (val.isEmpty()) continue;
+
+            if (keyL.endsWith("key-store-type") || keyL.endsWith("keystoretype") || keyL.endsWith("trust-store-type")) {
+                if (val.equalsIgnoreCase("JKS")) findings.add(new Finding("DEPRECATED_KEYSTORE_TYPE", name, line,
+                    key + "=JKS — proprietary keystore format; Java 9+ default is PKCS12. Migrate to PKCS12. "
+                    + "Not visible to CBOMkit (configuration file).", "L1-ConfigFile", "MEDIUM", "JKS"));
+                continue;
+            }
+            if (keyL.matches(".*ssl\\.(protocol|enabled-protocols)$")) {
+                String vU = val.toUpperCase();
+                if (vU.matches(".*\\b(SSLV3|TLSV1|TLSV1\\.1)\\b.*") && !vU.matches(".*TLSV1\\.[23].*") || vU.contains("SSL")) {
+                    findings.add(new Finding("DEPRECATED_TLS_VERSION", name, line,
+                        key + "=" + val + " — TLS 1.0/1.1 and SSL are deprecated (RFC 8996). Use TLSv1.2 or TLSv1.3. "
+                        + "Not visible to CBOMkit (configuration file).", "L1-ConfigFile", "HIGH", "TLS"));
+                } else {
+                    findings.add(new Finding("TLS_PROTOCOL_CONFIGURED", name, line,
+                        key + "=" + val + " — TLS configured. Recorded for CBOM inventory. "
+                        + "Not visible to CBOMkit (configuration file).", "L1-ConfigFile", "INFO", "TLS"));
+                }
+                continue;
+            }
+            String leaf = key.contains(".") ? key.substring(key.lastIndexOf('.') + 1) : key;
+            if (!SECRET_LEAF.matcher(leaf).find()) continue;
+            if (NOT_KEY_MATERIAL.matcher(leaf).find() || keyL.contains("client-secret") || keyL.contains("clientsecret")) continue;
+            if (!CRYPTO_CONTEXT.matcher(key).find()) continue;
+            if (val.contains("${") || val.startsWith("ENC(") || val.startsWith("{cipher}")) continue; // externalised / encrypted
+            if (val.matches("(?i)^(classpath\\*?|file|https?|vault):.*|^/.*|.*\\.(key|pem|pub|der|jks|p12|pfx|crt|cer)$")) continue; // a location, not key material
+
+            int bytes = val.getBytes(StandardCharsets.UTF_8).length;
+            boolean hex = val.matches("[0-9a-fA-F]{32,}");
+            boolean b64 = !hex && val.matches("[A-Za-z0-9+/]{24,}={0,2}");
+            int keyBytes = hex ? bytes / 2 : b64 ? (val.replace("=", "").length() * 3) / 4 : bytes;
+            boolean weak = keyBytes < 32;
+            String algo = keyL.matches(".*(jwt|jws|token|hmac|sign).*") ? "HMACSHA256" : "SECRET-KEY";
+            findings.add(new Finding(weak ? "WEAK_SECRET_IN_CONFIG" : "HARDCODED_SECRET_IN_CONFIG", name, line,
+                key + " is a hard-coded key in configuration (" + keyBytes + " bytes"
+                + (hex ? ", hex" : b64 ? ", Base64" : "") + ")." + (weak ? " Shorter than 256 bits." : "")
+                + " Move it to a secrets manager or an environment variable. Not visible to CBOMkit (configuration file).",
+                "L1-ConfigFile", weak ? "CRITICAL" : "HIGH", algo));
         }
     }
 
-    private void scanPomFile(String pomPath) {
-        File f = new File(pomPath);
-        if (!f.exists()) return;
-        try {
-            String content = new String(Files.readAllBytes(f.toPath()));
-            if (content.contains("bcprov-jdk15on")) {
-                findings.add(new Finding("LEGACY_BOUNCY_CASTLE", "pom.xml", 0,
-                    "Legacy BouncyCastle 'bcprov-jdk15on' (Java 1.5 target). Migrate to 'bcprov-jdk18on'. " +
-                    "CBOMkit misses this (pom.xml not scanned by CBOMkit).",
-                    "L1-MavenDependency", "MEDIUM", "BouncyCastle"));
-            }
-            if (content.contains("nimbus-jose-jwt")) {
-                findings.add(new Finding("NIMBUS_JOSE_JWT_PRESENT", "pom.xml", 0,
-                    "nimbus-jose-jwt detected. Verify version >= 10.0.1 (CVE-2025-53864). " +
-                    "CBOMkit misses this (pom.xml not scanned by CBOMkit).",
-                    "L1-MavenDependency", "INFO", "HMAC"));
-            }
-            if (content.contains("spring-security-oauth2") && content.contains("2.3.")) {
-                findings.add(new Finding("LEGACY_SPRING_SECURITY_OAUTH2", "pom.xml", 0,
-                    "Legacy spring-security-oauth2 2.3.x (EOL 2022). Migrate to Spring Authorization Server. " +
-                    "CBOMkit misses this (pom.xml not scanned by CBOMkit).",
-                    "L1-MavenDependency", "HIGH", "OAuth2"));
-            }
-        } catch (Exception e) {
-            System.err.println("Could not read pom.xml: " + e.getMessage());
+    /** L1 — build files in every module (Maven pom.xml and Gradle scripts). */
+    private void scanBuildFile(Path file) {
+        String name = rel(file);
+        String content;
+        try { content = Files.readString(file, StandardCharsets.UTF_8); }
+        catch (Exception e) { return; }
+        String L1 = "L1-MavenDependency";
+        if (content.contains("bcprov-jdk15on") || content.contains("bcpkix-jdk15on")) {
+            findings.add(new Finding("LEGACY_BOUNCY_CASTLE", name, 0,
+                "Legacy BouncyCastle '*-jdk15on' artifact (no longer updated). Migrate to '*-jdk18on'. "
+                + "Not visible to CBOMkit (build file).", L1, "MEDIUM", "BouncyCastle"));
+        }
+        if (content.contains("nimbus-jose-jwt")) {
+            findings.add(new Finding("NIMBUS_JOSE_JWT_PRESENT", name, 0,
+                "nimbus-jose-jwt declared directly. Verify version >= 10.0.1 (CVE-2025-53864). Recorded for inventory.",
+                L1, "INFO", "JOSE"));
+        }
+        Matcher m = Pattern.compile("spring-security-oauth2</artifactId>\\s*<version>\\s*2\\.").matcher(content);
+        if (m.find() || content.matches("(?s).*spring-security-oauth2:2\\..*")) {
+            findings.add(new Finding("LEGACY_SPRING_SECURITY_OAUTH2", name, 0,
+                "spring-security-oauth2 2.x (end of life 2022). Migrate to Spring Authorization Server / Spring Security 6.",
+                L1, "HIGH", "OAuth2"));
         }
     }
 
@@ -708,53 +1164,20 @@ public class SpringCryptoScanner {
         long info   = findings.stream().filter(f -> "INFO".equals(f.severity)).count();
         long qVuln  = findings.stream().filter(f -> "notQuantumSafe".equals(f.quantumStatus)).count();
         long cBrk   = findings.stream().filter(f -> "classicallyBroken".equals(f.quantumStatus)).count();
-        long miss   = findings.stream().filter(f -> !f.layer.equals("L4-RawJCA")).count();
+        long miss   = findings.stream().filter(f -> !f.cbomkitExpected).count();
 
         System.out.println("══════════════════════════════════════════════");
         System.out.printf(" CRITICAL: %d  HIGH: %d  MEDIUM: %d  INFO: %d%n", crit, high, medium, info);
         System.out.printf(" Quantum-vulnerable (Shor's): %d%n", qVuln);
         System.out.printf(" Classically broken: %d%n", cBrk);
-        System.out.printf(" CBOMkit would miss: %d of %d (%.0f%%)%n",
+        System.out.printf(" Outside CBOMkit's JCA rules: %d of %d (%.0f%%)%n",
             miss, findings.size(), findings.isEmpty() ? 0.0 : miss * 100.0 / findings.size());
+        System.out.printf(" By context: main=%d sample=%d docs=%d%n",
+            findings.stream().filter(f -> "main".equals(f.context)).count(),
+            findings.stream().filter(f -> "sample".equals(f.context)).count(),
+            findings.stream().filter(f -> "docs".equals(f.context)).count());
+        System.out.printf(" Java files scanned: %d, parse failures: %d%n", javaFilesScanned, parseFailures.size());
         System.out.println("══════════════════════════════════════════════");
-    }
-
-    /**
-     * Returns true only if CBOMkit would actually detect this finding.
-     *
-     * CBOMkit detects findings when:
-     *   - Layer is L4-RawJCA (CBOMkit only scans raw JCA calls)
-     *   - Severity is not INFO (CBOMkit only reports vulnerabilities, not inventory)
-     *   - Detection rule is a genuine JCA getInstance() or constructor call
-     *
-     * CBOMkit does NOT detect:
-     *   - CLASSICALLY_BROKEN_ALGORITHM_STRING  — plain string literal, not instanceof call
-     *   - QUANTUM_VULNERABLE_ALGORITHM_STRING  — plain string literal
-     *   - JWT_HMAC_ALGORITHM_DETECTED          — JJWT enum FieldAccessExpr
-     *   - QUANTUM_VULNERABLE_JWT_ALGORITHM     — JJWT enum FieldAccessExpr
-     *   - CRYPTOGRAPHIC_ASSET_DETECTED         — unclassified/INFO
-     *   - CRYPTOGRAPHIC_ASSET_INVENTORY        — INFO severity
-     *   - Anything at L1/L2/L3
-     */
-    private boolean isCBOMkitDetectable(Finding f) {
-        // Must be at Layer 4
-        if (!f.layer.equals("L4-RawJCA")) return false;
-        // Must be a vulnerability (not INFO inventory)
-        if (f.severity.equals("INFO")) return false;
-        // Must NOT be in a test file — CBOMkit scans production code only
-        String fp = f.file.replace("\\", "/");
-        if (fp.contains("/src/test/") || fp.contains("/test/java/")
-            || fp.endsWith("Test.java") || fp.endsWith("Tests.java")) return false;
-        // Must be a genuine JCA getInstance() or constructor rule
-        switch (f.rule) {
-            case "QUANTUM_VULNERABLE_JCA_ALGORITHM":
-            case "CLASSICALLY_BROKEN_JCA_ALGORITHM":
-            case "INSECURE_CIPHER_MODE_ECB":
-            case "WEAK_AES_KEY_SIZE":
-                return true;
-            default:
-                return false;
-        }
     }
 
     // ── Write CycloneDX 1.6 CBOM JSON ─────────────────────────────────────────
@@ -770,7 +1193,7 @@ public class SpringCryptoScanner {
         sb.append("    \"tools\": [{\n");
         sb.append("      \"vendor\": \"IIT Jodhpur\",\n");
         sb.append("      \"name\": \"SpringCryptoScanner\",\n");
-        sb.append("      \"version\": \"2.0\",\n");
+        sb.append("      \"version\": \"2.1\",\n");
         sb.append("      \"description\": \"CBOMkit L4 coverage + Spring L3/L2/L1 coverage\"\n");
         sb.append("    }],\n");
         sb.append("    \"component\": {\"type\": \"application\", \"name\": \"")
@@ -781,7 +1204,7 @@ public class SpringCryptoScanner {
             sb.append("      {\"name\": \"commit\",    \"value\": \"").append(escapeJson(sourceCommit)).append("\"},\n");
             sb.append("      {\"name\": \"revision\",  \"value\": \"").append(escapeJson(sourceBranch)).append("\"},\n");
         }
-        sb.append("      {\"name\": \"scannedBy\",    \"value\": \"SpringCryptoScanner v2.0 — IIT Jodhpur\"},\n");
+        sb.append("      {\"name\": \"scannedBy\",    \"value\": \"SpringCryptoScanner v2.1 — IIT Jodhpur\"},\n");
         sb.append("      {\"name\": \"thesisAuthor\", \"value\": \"Kandasamy | M25AID042\"}\n");
         sb.append("    ]\n");
         sb.append("  },\n");
@@ -805,21 +1228,16 @@ public class SpringCryptoScanner {
             sb.append("        \"oid\": \"\"\n");
             sb.append("      },\n");
             sb.append("      \"properties\": [\n");
-            sb.append("        {\"name\": \"spring-layer\",    \"value\": \"").append(escapeJson(f.layer)).append("\"},\n");
+            sb.append("        {\"name\": \"layer\",    \"value\": \"").append(escapeJson(f.layer)).append("\"},\n");
             sb.append("        {\"name\": \"detection-rule\",  \"value\": \"").append(escapeJson(f.rule)).append("\"},\n");
             sb.append("        {\"name\": \"severity\",        \"value\": \"").append(escapeJson(f.severity)).append("\"},\n");
             sb.append("        {\"name\": \"quantum-status\",  \"value\": \"").append(escapeJson(f.quantumStatus)).append("\"},\n");
             sb.append("        {\"name\": \"source-file\",     \"value\": \"").append(escapeJson(f.file)).append("\"},\n");
             sb.append("        {\"name\": \"source-line\",     \"value\": \"").append(f.line).append("\"},\n");
             sb.append("        {\"name\": \"pq-replacement\",  \"value\": \"").append(escapeJson(f.replacement)).append("\"},\n");
-            sb.append("        {\"name\": \"cbomkit-detects\", \"value\": \"")
-              // CBOMkit detects a finding ONLY when ALL of these are true:
-              //   1. Layer is L4-RawJCA (raw JCA call)
-              //   2. Severity is not INFO (vulnerable algorithm, not inventory)
-              //   3. Detection rule is a genuine JCA getInstance() or constructor call
-              //      NOT a plain string literal or JJWT enum (CBOMkit doesn't match those)
-              .append(isCBOMkitDetectable(f) ? "true" : "false")
-              .append("\"}\n");
+            sb.append("        {\"name\": \"code-context\",    \"value\": \"").append(f.context).append("\"},\n");
+            // true = produced by a JCA call that CBOMkit's rules cover; actual CBOMkit output is compared separately
+            sb.append("        {\"name\": \"cbomkit-expected\", \"value\": \"").append(f.cbomkitExpected).append("\"}\n");
             sb.append("      ]\n");
             sb.append("    }");
             if (i < findings.size() - 1) sb.append(",");
@@ -828,7 +1246,7 @@ public class SpringCryptoScanner {
         sb.append("  ],\n");
         sb.append("  \"vulnerabilities\": [],\n");
 
-        long miss = findings.stream().filter(f -> !f.layer.equals("L4-RawJCA")).count();
+        long miss = findings.stream().filter(f -> !f.cbomkitExpected).count();
         sb.append("  \"extensions\": [{\n");
         sb.append("    \"namespace\": \"https://github.com/KandasamyShunmugaraj/spring-crypto-scanner\",\n");
         sb.append("    \"springCryptoScannerSummary\": {\n");
@@ -839,8 +1257,10 @@ public class SpringCryptoScanner {
         sb.append("      \"layer4Findings\": ").append(findings.stream().filter(f->f.layer.startsWith("L4")).count()).append(",\n");
         sb.append("      \"quantumVulnerable\": ").append(findings.stream().filter(f->"notQuantumSafe".equals(f.quantumStatus)).count()).append(",\n");
         sb.append("      \"classicallyBroken\": ").append(findings.stream().filter(f->"classicallyBroken".equals(f.quantumStatus)).count()).append(",\n");
-        sb.append("      \"cbomkitWouldMiss\": ").append(miss).append(",\n");
-        sb.append("      \"note\": \"Layer 4 findings match CBOMkit JCA detection. Layers 1-3 are invisible to CBOMkit.\"\n");
+        sb.append("      \"outsideCbomkitJcaRules\": ").append(miss).append(",\n");
+        sb.append("      \"javaFilesScanned\": ").append(javaFilesScanned).append(",\n");
+        sb.append("      \"javaParseFailures\": ").append(parseFailures.size()).append(",\n");
+        sb.append("      \"note\": \"cbomkit-expected=true marks findings from JCA calls covered by CBOMkit rules; whether CBOMkit reports them must be checked against its actual output.\"\n");
         sb.append("    }\n  }]\n}\n");
 
         try (FileWriter fw = new FileWriter(outputPath)) { fw.write(sb.toString()); }

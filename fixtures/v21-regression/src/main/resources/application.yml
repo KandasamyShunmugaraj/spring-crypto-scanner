@@ -1,0 +1,4 @@
+# Bug 4: commented JKS must be ignored (v2.0 matched it).
+#   server.ssl.key-store-type: JKS
+jwt:
+  secret: myWeakSecret123     # Expected: WEAK_SECRET_IN_CONFIG (nested YAML key jwt.secret)
