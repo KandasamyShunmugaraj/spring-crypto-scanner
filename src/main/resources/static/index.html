@@ -194,7 +194,7 @@
 
 <!-- Header -->
 <div class="header">
-  <h1>🔍 SpringCryptoScanner — Thesis Tool v2.0</h1>
+  <h1>🔍 SpringCryptoScanner — Thesis Tool v2.1</h1>
   <p>Spring Security-aware Cryptographic Asset Discovery | CycloneDX 1.6 CBOM Output</p>
   <small>M.Tech Thesis — Kandasamy S | IIT Jodhpur | Supervisor: Dr. Bimal Mandal</small>
 </div>
@@ -270,7 +270,7 @@
     </div>
     <div class="stat-card">
       <div class="stat-num" style="color:#F39C12" id="statCBOMkitMiss">0</div>
-      <div class="stat-label">CBOMkit Would Miss</div>
+      <div class="stat-label">Outside CBOMkit's Rules</div>
     </div>
   </div>
 
@@ -281,7 +281,7 @@
       <div class="cbomkit-compare">
         <h4>⚖️ CBOMkit vs SpringCryptoScanner</h4>
         <div class="compare-row">
-          <div class="compare-tool">CBOMkit 2.2.0</div>
+          <div class="compare-tool">CBOMkit 2.3.0 (rule coverage)</div>
           <div class="compare-num" style="color:#E05C5C" id="cbomkitNum">0</div>
           <div class="compare-bar">
             <div class="compare-fill" id="cbomkitBar"
@@ -336,23 +336,23 @@
   <div class="info-banner" id="cmpBanner">
     <strong>How to use:</strong> Run a scan on the Scanner tab first — paste any
     <strong>GitHub URL</strong> or local path — then return here to see the full comparison.
-    The <strong>spring-security-samples ★</strong> project gives the most compelling result:
-    CBOMkit = 0, SpringCryptoScanner = 2 CRITICAL.
+    The CBOMkit figures here are <strong>rule coverage</strong> (findings from JCA calls CBOMkit is built to detect),
+    not CBOMkit's actual output. Run CBOMkit on the same commit to compare real results.
   </div>
 
   <!-- Hero numbers -->
   <div class="cmp-hero">
     <div class="cmp-tool-card cbomkit">
-      <div class="cmp-tool-name">CBOMkit 2.2.0 (IBM / Linux Foundation PQCA)</div>
+      <div class="cmp-tool-name">CBOMkit 2.3.0 (PQCA / Linux Foundation)</div>
       <div class="cmp-tool-num" id="cmpCBOMkitNum">—</div>
-      <div class="cmp-tool-sub">cryptographic assets found</div>
+      <div class="cmp-tool-sub">findings covered by CBOMkit's JCA rules</div>
       <div style="margin-top:12px;font-size:11px;color:#6B7A99">
-        Detects: Layer 4 (raw JCA calls) only<br>
-        Misses: Spring Security beans, @Convert, YAML config
+        Rules cover: JCA and BouncyCastle calls (Layer 4)<br>
+        Outside its rules: Spring Security beans, @Convert, config and build files, JJWT/Nimbus enums, hard-coded keys
       </div>
     </div>
     <div class="cmp-tool-card scanner">
-      <div class="cmp-tool-name">SpringCryptoScanner v2.0 (This Thesis)</div>
+      <div class="cmp-tool-name">SpringCryptoScanner v2.1 (This Thesis)</div>
       <div class="cmp-tool-num" id="cmpScannerNum">—</div>
       <div class="cmp-tool-sub">cryptographic findings detected</div>
       <div style="margin-top:12px;font-size:11px;color:#6B7A99">
@@ -379,7 +379,7 @@
         <th>Layer</th>
         <th>Description</th>
         <th>Example</th>
-        <th style="text-align:center">CBOMkit</th>
+        <th style="text-align:center">CBOMkit (rule coverage)</th>
         <th style="text-align:center">SpringCryptoScanner</th>
         <th>Coverage Gap</th>
       </tr>
@@ -404,7 +404,7 @@
           <th>Algorithm</th>
           <th>Severity</th>
           <th>Quantum Status</th>
-          <th style="text-align:center">CBOMkit Detects?</th>
+          <th style="text-align:center">In CBOMkit's Rules?</th>
           <th>PQ Replacement</th>
         </tr>
       </thead>
@@ -481,9 +481,10 @@
     </h3>
     <div style="margin-bottom:12px;font-size:12px;color:#6B7A99">
       This is the complete CycloneDX 1.6-compliant CBOM produced by SpringCryptoScanner.
-      Each finding includes a <strong style="color:#E8B84B">cbomkit-detects</strong> field
-      marking whether CBOMkit would have reported it.
-      Layer 1–3 findings all have <strong style="color:#E05C5C">cbomkit-detects: false</strong>.
+      Each finding includes a <strong style="color:#E8B84B">cbomkit-expected</strong> field:
+      <strong>true</strong> when it comes from a JCA call that CBOMkit's rules cover.
+      Whether CBOMkit actually reports it depends on CBOMkit's module detection, so compare with its own scan.
+      Each finding also has a <strong style="color:#E8B84B">code-context</strong> (main / sample / docs).
     </div>
     <div id="cbomFilename" style="font-size:11px;color:#6B7A99;margin-bottom:8px;display:none">
       📄 File: <span id="cbomFilenameText">cbom-springscanner.json</span>
@@ -570,7 +571,7 @@ function renderScanner(data) {
   document.getElementById('statCBOMkitMiss').textContent  = data.cbomkitWouldMiss;
 
   // CBOMkit vs scanner bar
-  const cbomkitCount = data.layer4 || 0;
+  const cbomkitCount = data.cbomkitExpected || 0;   // rule coverage, not CBOMkit's actual output
   const total        = data.totalFindings || 0;
   const maxW = Math.max(total, 1);
   document.getElementById('cbomkitNum').textContent = cbomkitCount;
@@ -618,7 +619,7 @@ function renderScanner(data) {
             <span class="badge ${severityBadge(f.severity)}">${f.severity}</span>
             <span class="badge badge-blue">${f.layer}</span>
             <span class="badge ${f.cbomkitDetects==='true'?'badge-found':'badge-miss'}">
-              ${f.cbomkitDetects==='true'?'CBOMkit ✓':'CBOMkit ✗ MISS'}
+              ${f.cbomkitDetects==='true'?'CBOMkit rule ✓':'Outside CBOMkit rules'}
             </span>
             ${f.rule}
           </div>
@@ -644,7 +645,7 @@ function renderScanner(data) {
 // ── Render Comparison tab ────────────────────────────────────────────────────
 function renderComparison(data) {
   // Hero numbers
-  const cbomkitFinds = data.layer4 || 0;
+  const cbomkitFinds = data.cbomkitExpected || 0;   // rule coverage, not CBOMkit's actual output
   document.getElementById('cmpCBOMkitNum').textContent = cbomkitFinds;
   document.getElementById('cmpScannerNum').textContent = data.totalFindings;
 
@@ -652,16 +653,14 @@ function renderComparison(data) {
   const gap = data.cbomkitWouldMiss || 0;
   document.getElementById('cmpSummary').innerHTML = `<p>
     Scanned: <strong>${data.projectName}</strong> &nbsp;|&nbsp;
-    CBOMkit found: <strong style="color:#28A0A0">${cbomkitFinds}</strong>
-    cryptographic assets &nbsp;|&nbsp;
     SpringCryptoScanner found: <strong style="color:#E05C5C">${data.totalFindings}</strong>
     findings &nbsp;|&nbsp;
+    covered by CBOMkit's JCA rules: <strong style="color:#28A0A0">${cbomkitFinds}</strong> &nbsp;|&nbsp;
     <strong style="color:#E8B84B">${gap} findings (${
       data.totalFindings > 0
         ? Math.round((gap/data.totalFindings)*100) : 0
-    }%) would be completely invisible to CBOMkit</strong>.
-    Every Layer 1–3 finding carries <code style="color:#E05C5C">cbomkit-detects: false</code>
-    in the CycloneDX CBOM output.
+    }%) are outside CBOMkit's rules</strong>.
+    These are rule-coverage figures; CBOMkit's actual output can be lower (e.g. modules it does not index).
   </p>`;
 
   // Layer table
@@ -669,30 +668,30 @@ function renderComparison(data) {
     {
       lbl:'L4', name:'Raw JCA Calls',
       ex:'MessageDigest.getInstance("SHA-1")',
-      cbomkit: data.layer4 || 0,
+      cbomkit: data.cbomkitExpected || 0,
       scanner: data.layer4 || 0,
-      gap: 'None — CBOMkit covers this layer'
+      gap: 'Partly covered — CBOMkit rules cover JCA calls; JJWT/Nimbus enums, algorithm strings and hard-coded keys are outside them'
     },
     {
       lbl:'L3', name:'Spring Security @Bean',
-      ex:'new BCryptPasswordEncoder(4) / NimbusJwtDecoder.withSecretKey()',
+      ex:'NoOpPasswordEncoder / NimbusJwtDecoder.withPublicKey() (RS256) / algorithm set in a @Bean',
       cbomkit: 0,
       scanner: data.layer3 || 0,
-      gap: 'Spring bean instantiation — not a JCA getInstance() call'
+      gap: 'Framework object or setting — no JCA getInstance() call in application code'
     },
     {
       lbl:'L2', name:'Spring Data @Convert',
       ex:'@Convert(converter=AesEncryptor.class) on entity field',
       cbomkit: 0,
       scanner: data.layer2 || 0,
-      gap: 'Annotation not traced into converter — algorithm invisible'
+      gap: 'Links the cipher to the protected entity field — not modelled by CBOMkit'
     },
     {
       lbl:'L1', name:'Config Files + Maven',
       ex:'application.yml: key-store-type: JKS / pom.xml CVE dependency',
       cbomkit: 0,
       scanner: data.layer1 || 0,
-      gap: 'YAML/properties not parsed by SonarQube Java plugin'
+      gap: 'Config and build files are not Java source — CBOMkit does not scan them'
     },
   ];
 
@@ -737,8 +736,8 @@ function renderComparison(data) {
           ${qsLabel(f.quantumStatus)}</td>
         <td style="text-align:center">
           ${f.cbomkitDetects === 'true'
-            ? '<span class="badge badge-found">✅ Yes</span>'
-            : '<span class="badge badge-miss">❌ No — MISS</span>'}
+            ? '<span class="badge badge-found">✅ Yes (JCA call)</span>'
+            : '<span class="badge badge-miss">❌ No</span>'}
         </td>
         <td style="font-size:11px;color:#E8B84B">
           ${f.replacement !== 'See NIST PQC standards' ? f.replacement : '—'}</td>
